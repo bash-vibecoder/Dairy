@@ -1,0 +1,5 @@
+/build/
+/.tools/
+/dist/
+/node_modules/
+*.idsig

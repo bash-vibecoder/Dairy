@@ -172,7 +172,6 @@
     $('editor').value = entry.text || '';
     $('editor').placeholder = locked ? 'This entry is locked after the day ended.' : 'Write about your day…';
     $('previousDay').disabled = false;
-    $('nextDay').disabled = selectedKey >= todayKey;
     $('bottomToday').classList.toggle('active', today);
     const state = $('saveState'); state.className = locked ? 'save-state locked' : entry.savedAt ? 'save-state saved' : 'save-state';
     state.innerHTML = '<i class="status-dot"></i><span>' + (locked ? 'Locked' : entry.savedAt ? 'Saved' : 'Ready') + '</span>';
@@ -221,13 +220,16 @@
     const grid = document.createElement('div'); grid.className = 'calendar-grid'; body.append(grid);
     const draw = () => {
       const month = calendarCursor.getMonth(), year = calendarCursor.getFullYear();
-      title.textContent = new Intl.DateTimeFormat(undefined,{month:'long',year:'numeric'}).format(calendarCursor) + ' · ' + jalaliForKey(dateKey(calendarCursor)).monthName;
+      title.textContent = new Intl.DateTimeFormat(undefined,{month:'long',year:'numeric'}).format(calendarCursor);
+      forward.disabled = year > fromKey(todayKey).getFullYear() || (year === fromKey(todayKey).getFullYear() && month >= fromKey(todayKey).getMonth());
       grid.replaceChildren(); for (const weekday of WEEKDAYS) grid.append(textNode('div',weekday,'weekday'));
       const offset = (calendarCursor.getDay() + 6) % 7, days = new Date(year, month + 1, 0).getDate();
       for (let i = 0; i < offset; i++) grid.append(textNode('div','','calendar-cell blank'));
       for (let day = 1; day <= days; day++) {
-        const date = new Date(year,month,day,12), key = dateKey(date), cell = textNode('button',String(day),'calendar-cell');
-        const jalali = jalaliForKey(key); cell.title = jalaliLabel(key); cell.append(textNode('small',jalali.day + ' ' + jalali.monthName.slice(0,3)));
+        const date = new Date(year,month,day,12), key = dateKey(date), cell = textNode('button','','calendar-cell');
+        const jalali = jalaliForKey(key); cell.title = String(day) + ' ' + new Intl.DateTimeFormat(undefined,{month:'long'}).format(date) + ' · ' + jalaliLabel(key);
+        cell.setAttribute('aria-label', cell.title);
+        cell.append(textNode('span',String(day),'calendar-gregorian'), textNode('span',String(jalali.day),'calendar-jalali'));
         if (key === selectedKey) cell.classList.add('selected'); if (key === todayKey) cell.classList.add('today'); if (isLocked(key)) cell.classList.add('locked');
         if (entries[key] && entries[key].text) cell.append(textNode('i','','entry-dot'));
         cell.disabled = key > todayKey; cell.addEventListener('click', () => { selectDate(key); finishDialog(true); }); grid.append(cell);
@@ -294,7 +296,7 @@
     $('menuButton').addEventListener('click', e => { e.stopPropagation(); $('menuPopover').hidden = !$('menuPopover').hidden; });
     $('menuPopover').addEventListener('click', e => { const button = e.target.closest('[data-action]'); if (button) handleAction(button.dataset.action); });
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
-    $('previousDay').addEventListener('click', () => handleAction('previous')); $('nextDay').addEventListener('click', () => handleAction('next'));
+    $('previousDay').addEventListener('click', () => handleAction('previous'));
     $('editor').addEventListener('input', () => { updateMeta(); updateLineNumbers(); scheduleAutosave(); });
     $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));

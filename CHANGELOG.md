@@ -1,3 +1,11 @@
+# ADiaryT 1.3
+
+- Open the calendar as a full page with a back button, instead of a popup window.
+- Show the corresponding Solar Hijri month names in smaller text below the Gregorian month heading.
+- Show both Solar months when a Gregorian month crosses their boundary, including both years at Nowruz.
+- Keep future-date previews, two-row day numbers, and read-only past entries.
+- Android version 1.3 (version code 13), packaged as `ADiaryT-v1.3.apk`.
+
 # ADiaryT 1.2
 
 - Browse future calendar months and years, and tap future dates to preview their Gregorian and Solar Hijri dates.

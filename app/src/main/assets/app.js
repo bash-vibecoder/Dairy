@@ -210,21 +210,35 @@
   function finishDialog(value) { $('dialogBackdrop').hidden = true; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
   function closeMenu() { $('menuPopover').hidden = true; }
 
+  function closeCalendar() {
+    $('calendarPage').hidden = true;
+    $('app').hidden = false;
+    $('bottomCalendar').focus({preventScroll:true});
+  }
   function showCalendar() {
     closeMenu();
+    document.activeElement?.blur();
     calendarCursor = fromKey(selectedKey); calendarCursor.setDate(1);
     let focusedKey = selectedKey;
-    const body = document.createElement('div');
+    const body = textNode('div', '', 'calendar-view');
     const head = document.createElement('div'); head.className = 'calendar-head';
     const back = textNode('button','‹'); const forward = textNode('button','›'); const title = textNode('strong','');
     back.setAttribute('aria-label', 'Previous month'); forward.setAttribute('aria-label', 'Next month');
-    head.append(back,title,forward); body.append(head);
+    const monthTitle = textNode('div', '', 'calendar-month-title');
+    const solarTitle = textNode('small', '', 'calendar-solar-month');
+    monthTitle.setAttribute('aria-live', 'polite'); monthTitle.append(title, solarTitle);
+    head.append(back,monthTitle,forward); body.append(head);
     const grid = document.createElement('div'); grid.className = 'calendar-grid'; body.append(grid);
     body.append(textNode('p', 'Gregorian day above · Solar Hijri day below', 'hint calendar-legend'));
     const preview = textNode('div', '', 'calendar-preview'); preview.setAttribute('aria-live', 'polite'); body.append(preview);
     const draw = () => {
       const month = calendarCursor.getMonth(), year = calendarCursor.getFullYear();
       title.textContent = new Intl.DateTimeFormat(undefined,{month:'long',year:'numeric'}).format(calendarCursor);
+      const firstSolar = jalaliForKey(dateKey(calendarCursor));
+      const lastSolar = jalaliForKey(dateKey(new Date(year, month + 1, 0, 12)));
+      solarTitle.textContent = firstSolar.year === lastSolar.year
+        ? (firstSolar.month === lastSolar.month ? firstSolar.monthName : firstSolar.monthName + ' – ' + lastSolar.monthName) + ' ' + firstSolar.year
+        : firstSolar.monthName + ' ' + firstSolar.year + ' – ' + lastSolar.monthName + ' ' + lastSolar.year;
       grid.replaceChildren(); for (const weekday of WEEKDAYS) grid.append(textNode('div',weekday,'weekday'));
       const offset = (calendarCursor.getDay() + 6) % 7, days = new Date(year, month + 1, 0).getDate();
       for (let i = 0; i < offset; i++) grid.append(textNode('div','','calendar-cell blank'));
@@ -239,7 +253,7 @@
         if (entries[key] && entries[key].text) cell.append(textNode('i','','entry-dot'));
         cell.addEventListener('click', () => {
           if (key > todayKey) { focusedKey = key; draw(); return; }
-          selectDate(key); finishDialog(true);
+          selectDate(key); closeCalendar();
         }); grid.append(cell);
       }
       const future = focusedKey > todayKey;
@@ -252,7 +266,12 @@
     const changeMonth = amount => { calendarCursor.setMonth(calendarCursor.getMonth() + amount); focusedKey = dateKey(calendarCursor); draw(); };
     back.addEventListener('click', () => changeMonth(-1));
     forward.addEventListener('click', () => changeMonth(1));
-    draw(); dialog('Calendar · Gregorian + Solar Hijri', body, [{label:'Close',value:null}]);
+    draw();
+    $('calendarContent').replaceChildren(body);
+    $('app').hidden = true;
+    $('calendarPage').hidden = false;
+    $('calendarContent').scrollTop = 0;
+    $('calendarBack').focus({preventScroll:true});
   }
   function showEntries() {
     closeMenu(); const body = document.createElement('div'); body.className = 'entry-list';
@@ -312,16 +331,23 @@
     $('menuPopover').addEventListener('click', e => { const button = e.target.closest('[data-action]'); if (button) handleAction(button.dataset.action); });
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
     $('previousDay').addEventListener('click', () => handleAction('previous'));
+    $('calendarBack').addEventListener('click', closeCalendar);
     $('editor').addEventListener('input', () => { updateMeta(); updateLineNumbers(); scheduleAutosave(); });
     $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));
     $('dialogBackdrop').addEventListener('click', e => { if (e.target === $('dialogBackdrop')) finishDialog(null); });
     document.addEventListener('click', e => { if (!e.target.closest('#menuPopover') && !e.target.closest('#menuButton')) closeMenu(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('dialogBackdrop').hidden) finishDialog(null); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && handleBack()) e.preventDefault(); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) flushSession(); }); window.addEventListener('pagehide', flushSession);
+  }
+  function handleBack() {
+    if (!$('dialogBackdrop').hidden) { finishDialog(null); return true; }
+    if (!$('calendarPage').hidden) { closeCalendar(); return true; }
+    if (!$('menuPopover').hidden) { closeMenu(); return true; }
+    return false;
   }
   bindEvents();
   setInterval(renderClock, 30000); clockTimer = setInterval(renderClock, 30000);
-  window.App = {nativeEvent, flushSession, handleBack:() => { if (!$('dialogBackdrop').hidden) { finishDialog(null); return true; } if (!$('menuPopover').hidden) { closeMenu(); return true; } return false;}};
+  window.App = {nativeEvent, flushSession, handleBack};
   native('ready');
 }());

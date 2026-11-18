@@ -14,10 +14,12 @@
   let restored = false;
   let persistTimer = 0;
   let typingTimer = 0;
+  let pendingSaveLine = null;
   let clockTimer = 0;
   let toastTimer = 0;
   let calendarCursor = new Date();
   let dialogResolve = null;
+  let autosaveLogKey = '';
   let requestCounter = 0;
   const pending = new Map();
 
@@ -68,7 +70,7 @@
   function stateSnapshot() {
     const copy = {};
     for (const [key, entry] of Object.entries(entries)) copy[key] = {...entry};
-    return {version:2, settings, selectedKey, entries:copy};
+    return {version:3, settings, selectedKey, entries:copy};
   }
   function persistNow() {
     clearTimeout(persistTimer);
@@ -78,26 +80,43 @@
     native('persist', state);
   }
   function schedulePersist() { clearTimeout(persistTimer); persistTimer = setTimeout(persistNow, 450); }
-  function flushSession() { if (selectedKey && $('editor')) commitCurrent(false); persistNow(); }
+  function flushSession() {
+    clearTimeout(typingTimer);
+    if (selectedKey && $('editor')) {
+      commitCurrent();
+      if (selectedKey === todayKey) {
+        const saved = !!currentEntry().savedAt;
+        $('saveState').className = saved ? 'save-state saved' : 'save-state';
+        $('saveState').innerHTML = '<i class="status-dot"></i><span>' + (saved ? 'Saved' : 'Ready') + '</span>';
+      }
+    }
+    persistNow();
+  }
 
   function getEntry(key) {
-    if (!entries[key] || typeof entries[key] !== 'object') entries[key] = {key, text:'', savedAt:'', updatedAt:''};
+    if (!entries[key] || typeof entries[key] !== 'object') entries[key] = {key, text:'', savedAt:'', updatedAt:'', saveLog:[]};
     return entries[key];
   }
+  function validTimestamp(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)); }
   function migrateDocuments(state) {
     const result = {};
     if (state && state.entries && typeof state.entries === 'object') {
       for (const [key, value] of Object.entries(state.entries)) {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(key) && value && typeof value === 'object') result[key] = {
-          key, text:typeof value.text === 'string' ? value.text : '', savedAt:value.savedAt || value.updatedAt || '', updatedAt:value.updatedAt || value.savedAt || ''
-        };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !value || typeof value !== 'object') continue;
+        const savedAt = validTimestamp(value.savedAt) ? value.savedAt : validTimestamp(value.updatedAt) ? value.updatedAt : '';
+        const saveLog = Array.isArray(value.saveLog) ? value.saveLog
+          .filter(item => item && validTimestamp(item.at))
+          .map(item => ({at:item.at, source:item.source === 'legacy' ? 'legacy' : 'autosave', line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null})) : [];
+        if (!saveLog.length && savedAt) saveLog.push({at:savedAt, source:'legacy', line:null});
+        result[key] = {key, text:typeof value.text === 'string' ? value.text : '', savedAt,
+          updatedAt:validTimestamp(value.updatedAt) ? value.updatedAt : savedAt, saveLog};
       }
     }
     // A workspace saved by the reference editor can still be opened as a diary.
     if (!Object.keys(result).length && Array.isArray(state && state.documents)) {
       for (const doc of state.documents) {
         const match = String(doc.name || '').match(/(\d{4}-\d{2}-\d{2})/);
-        if (match) result[match[1]] = {key:match[1], text:doc.text || '', savedAt:'', updatedAt:''};
+        if (match) result[match[1]] = {key:match[1], text:doc.text || '', savedAt:'', updatedAt:'', saveLog:[]};
       }
     }
     return result;
@@ -136,24 +155,25 @@
     }
   }
   function currentEntry() { return getEntry(selectedKey); }
-  function commitCurrent(stamp) {
-    if (!selectedKey || !$('editor')) return;
+  function editorLine() { return $('editor').value.slice(0, $('editor').selectionEnd).split('\n').length; }
+  function commitCurrent() {
+    if (!restored || selectedKey !== todayKey || !$('editor')) { pendingSaveLine = null; return false; }
     const entry = currentEntry();
     const text = $('editor').value;
-    if (entry.text !== text) { entry.text = text; entry.updatedAt = isoNow(); }
-    if (stamp && !isLocked(selectedKey) && text.trim()) entry.savedAt = isoNow();
+    if (entry.text === text) { pendingSaveLine = null; return false; }
+    const at = isoNow();
+    entry.text = text; entry.updatedAt = at; entry.savedAt = at;
+    entry.saveLog.push({at, source:'autosave', line:pendingSaveLine || editorLine()});
+    pendingSaveLine = null;
+    updateSavedAt(entry); refreshAutosaveLog();
+    return true;
   }
   function scheduleAutosave() {
     if (isLocked(selectedKey)) return;
+    pendingSaveLine = editorLine();
     clearTimeout(typingTimer);
     const state = $('saveState'); state.className = 'save-state saving'; state.innerHTML = '<i class="status-dot"></i><span>Typing…</span>';
-    typingTimer = setTimeout(() => {
-      commitCurrent(true);
-      const entry = currentEntry();
-      state.className = 'save-state saved'; state.innerHTML = '<i class="status-dot"></i><span>Saved</span>';
-      updateSavedAt(entry); updateMeta(); schedulePersist();
-    }, 900);
-    schedulePersist();
+    typingTimer = setTimeout(flushSession, 900);
   }
   function updateLineNumbers() {
     const lines = Math.max(1, $('editor').value.split('\n').length);
@@ -166,9 +186,8 @@
     $('entryMeta').textContent = words + ' word' + (words === 1 ? '' : 's') + ' · ' + text.length.toLocaleString() + ' character' + (text.length === 1 ? '' : 's');
   }
   function updateSavedAt(entry) {
-    if (!entry.savedAt) { $('savedAt').textContent = 'Not saved yet'; return; }
-    const saved = new Date(entry.savedAt);
-    $('savedAt').textContent = 'Saved at ' + nowTime(saved);
+    $('savedAt').textContent = entry.savedAt ? 'Saved at ' + nowTime(new Date(entry.savedAt)) : 'Not saved yet';
+    $('savedAt').setAttribute('aria-label', 'Show autosave times for ' + longDate(fromKey(selectedKey)) + '. ' + $('savedAt').textContent);
   }
   function renderDate() {
     const date = fromKey(selectedKey), entry = currentEntry(), locked = isLocked(selectedKey);
@@ -199,6 +218,7 @@
     $('topDate').textContent = shortDate(now) + ' · ' + nowTime(now);
     if (key !== todayKey) {
       // Re-evaluate the lock boundary whenever the app remains open over midnight.
+      clearTimeout(typingTimer); commitCurrent();
       todayKey = key;
       for (const date of Object.keys(entries)) if (isLocked(date)) entries[date].locked = true;
       if (selectedKey > todayKey) selectedKey = todayKey;
@@ -211,8 +231,8 @@
   function selectDate(key) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || key > todayKey) return;
     clearTimeout(typingTimer);
-    if (selectedKey && !isLocked(selectedKey)) commitCurrent(true);
-    selectedKey = key; getEntry(key); renderDate(); closeMenu(); schedulePersist();
+    commitCurrent();
+    selectedKey = key; getEntry(key); renderDate(); closeMenu(); persistNow();
   }
 
   function textNode(tag, text, cls) { const node = document.createElement(tag); node.textContent = text; if (cls) node.className = cls; return node; }
@@ -222,10 +242,48 @@
     $('dialogBackdrop').hidden = false;
     return new Promise(resolve => { dialogResolve = resolve; });
   }
-  function finishDialog(value) { $('dialogBackdrop').hidden = true; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
+  function finishDialog(value) { $('dialogBackdrop').hidden = true; autosaveLogKey = ''; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
   function closeMenu() {
     $('menuPopover').hidden = true;
     for (const button of document.querySelectorAll('[data-open-menu]')) button.setAttribute('aria-expanded', 'false');
+  }
+
+  function autosaveLogBody(key) {
+    const body = textNode('div', '', 'autosave-log');
+    const date = textNode('p', '', 'autosave-log-date');
+    date.append(textNode('strong', new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(key))), textNode('span', jalaliLabel(key)));
+    body.append(date);
+    const log = getEntry(key).saveLog;
+    if (!log.length) {
+      body.append(textNode('p', 'No autosave times have been recorded for this day yet.', 'hint'));
+      return body;
+    }
+    const hasLegacy = log.some(item => item.source === 'legacy');
+    body.append(textNode('p', log.length + (hasLegacy ? ' saved time' : ' autosave') + (log.length === 1 ? '' : 's') + ' · newest first', 'hint'));
+    const list = textNode('ol', '', 'autosave-log-list');
+    for (const item of [...log].reverse()) {
+      const row = textNode('li', '', 'autosave-log-row');
+      const at = new Date(item.at);
+      const time = textNode('time', new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:!settings.use24Hour}).format(at));
+      time.dateTime = item.at;
+      const details = textNode('span', '', 'autosave-log-details');
+      details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', item.source === 'legacy' ? 'Last known save' : 'Autosaved', 'hint'));
+      row.append(time, details);
+      if (dateKey(at) !== key) row.append(textNode('small', new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'numeric'}).format(at), 'hint'));
+      list.append(row);
+    }
+    body.append(list);
+    body.append(textNode('p', 'Line numbers show where the last edit ended. Each autosave saves the whole entry.', 'hint autosave-log-note'));
+    if (hasLegacy) body.append(textNode('p', 'Earlier app versions kept only the last saved time. Older autosave times are unavailable.', 'hint autosave-legacy-note'));
+    return body;
+  }
+  function refreshAutosaveLog() {
+    if (autosaveLogKey && !$('dialogBackdrop').hidden) $('dialogBody').replaceChildren(autosaveLogBody(autosaveLogKey));
+  }
+  function showAutosaveLog() {
+    closeMenu();
+    autosaveLogKey = selectedKey;
+    dialog('Autosave times', autosaveLogBody(selectedKey), [{label:'Close',value:null}]);
   }
 
   function closeCalendar() {
@@ -366,6 +424,7 @@
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
     $('previousDay').addEventListener('click', () => handleAction('previous'));
     $('calendarBack').addEventListener('click', closeCalendar);
+    $('savedAt').addEventListener('click', showAutosaveLog);
     $('editor').addEventListener('input', () => { updateMeta(); updateLineNumbers(); scheduleAutosave(); });
     $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));

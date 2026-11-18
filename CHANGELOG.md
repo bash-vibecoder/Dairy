@@ -1,3 +1,12 @@
+# ADiaryT 1.5
+
+- Tap the saved time at the bottom right to open the selected day's autosave time log.
+- Keep time logs on the device across restarts, with newest times first, seconds, and the chosen 12-hour or 24-hour clock format.
+- Include the line where the last edit ended with each new autosave; show “Line not recorded” for older saves that have no line metadata.
+- Record saves when text actually changes, including clearing text and saving pending edits when leaving the day or backgrounding the app.
+- Preserve the last known save time from older app versions, clearly noting that earlier times were not recorded.
+- Android version 1.5 (version code 15), packaged as `ADiaryT-v1.5.apk`.
+
 # ADiaryT 1.4
 
 - Keep one shared bottom navigation bar visible on the diary and full-page calendar.

@@ -1,4 +1,13 @@
-# AnoteP 1.0
+# ADiaryT 1.2
+
+- Browse future calendar months and years, and tap future dates to preview their Gregorian and Solar Hijri dates.
+- Keep future previews inside the calendar; diary writing remains limited to today, and past entries stay read only.
+- Preserve the two-row calendar layout with the smaller Solar Hijri day below the Gregorian day.
+- Set the Android app version to 1.2 and version code to 12 for upgrades from earlier builds.
+- Derive the APK filename from the app version and verify that the packaged version matches: `ADiaryT-v1.2.apk`.
+- Add browser checks for calendar navigation, date previews, read-only history, offline loading, and phone/tablet layout.
+
+## Upstream editor history: AnoteP 1.0
 
 First Android release. Independent Notepad++ inspired editor with a black
 adaptive launcher icon featuring a penguin, classic light and optional dark

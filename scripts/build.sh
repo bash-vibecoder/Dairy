@@ -16,7 +16,13 @@ done
 mkdir -p build/generated build/classes build/dex build/tests dist .tools
 find build/generated build/classes build/dex build/tests -type f -delete
 ANOTEP_MANIFEST=app/src/main/AndroidManifest.xml
-ANOTEP_APK=dist/ADiaryT-v1.0.apk
+ADIARYT_VERSION=$(python3 - <<'PY'
+import xml.etree.ElementTree as ET
+manifest = ET.parse('app/src/main/AndroidManifest.xml').getroot()
+print(manifest.attrib['{http://schemas.android.com/apk/res/android}versionName'])
+PY
+)
+ANOTEP_APK="dist/ADiaryT-v${ADIARYT_VERSION}.apk"
 if [[ "${ANOTEP_DEBUG:-0}" == 1 ]]; then
     python3 - <<'PY'
 from pathlib import Path
@@ -25,7 +31,7 @@ Path('build/debug').mkdir(exist_ok=True)
 Path('build/debug/AndroidManifest.xml').write_text(manifest)
 PY
     ANOTEP_MANIFEST=build/debug/AndroidManifest.xml
-    ANOTEP_APK=build/AnoteP-debug.apk
+    ANOTEP_APK="build/ADiaryT-v${ADIARYT_VERSION}-debug.apk"
 fi
 node --check app/src/main/assets/app.js
 node tests/editor-core.test.js

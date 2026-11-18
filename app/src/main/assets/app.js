@@ -213,15 +213,18 @@
   function showCalendar() {
     closeMenu();
     calendarCursor = fromKey(selectedKey); calendarCursor.setDate(1);
+    let focusedKey = selectedKey;
     const body = document.createElement('div');
     const head = document.createElement('div'); head.className = 'calendar-head';
     const back = textNode('button','‹'); const forward = textNode('button','›'); const title = textNode('strong','');
+    back.setAttribute('aria-label', 'Previous month'); forward.setAttribute('aria-label', 'Next month');
     head.append(back,title,forward); body.append(head);
     const grid = document.createElement('div'); grid.className = 'calendar-grid'; body.append(grid);
+    body.append(textNode('p', 'Gregorian day above · Solar Hijri day below', 'hint calendar-legend'));
+    const preview = textNode('div', '', 'calendar-preview'); preview.setAttribute('aria-live', 'polite'); body.append(preview);
     const draw = () => {
       const month = calendarCursor.getMonth(), year = calendarCursor.getFullYear();
       title.textContent = new Intl.DateTimeFormat(undefined,{month:'long',year:'numeric'}).format(calendarCursor);
-      forward.disabled = year > fromKey(todayKey).getFullYear() || (year === fromKey(todayKey).getFullYear() && month >= fromKey(todayKey).getMonth());
       grid.replaceChildren(); for (const weekday of WEEKDAYS) grid.append(textNode('div',weekday,'weekday'));
       const offset = (calendarCursor.getDay() + 6) % 7, days = new Date(year, month + 1, 0).getDate();
       for (let i = 0; i < offset; i++) grid.append(textNode('div','','calendar-cell blank'));
@@ -229,14 +232,26 @@
         const date = new Date(year,month,day,12), key = dateKey(date), cell = textNode('button','','calendar-cell');
         const jalali = jalaliForKey(key); cell.title = String(day) + ' ' + new Intl.DateTimeFormat(undefined,{month:'long'}).format(date) + ' · ' + jalaliLabel(key);
         cell.setAttribute('aria-label', cell.title);
+        cell.dataset.date = key;
         cell.append(textNode('span',String(day),'calendar-gregorian'), textNode('span',String(jalali.day),'calendar-jalali'));
-        if (key === selectedKey) cell.classList.add('selected'); if (key === todayKey) cell.classList.add('today'); if (isLocked(key)) cell.classList.add('locked');
+        if (key === focusedKey) cell.classList.add('selected'); if (key === todayKey) cell.classList.add('today'); if (isLocked(key)) cell.classList.add('locked');
+        if (key > todayKey) cell.classList.add('future');
         if (entries[key] && entries[key].text) cell.append(textNode('i','','entry-dot'));
-        cell.disabled = key > todayKey; cell.addEventListener('click', () => { selectDate(key); finishDialog(true); }); grid.append(cell);
+        cell.addEventListener('click', () => {
+          if (key > todayKey) { focusedKey = key; draw(); return; }
+          selectDate(key); finishDialog(true);
+        }); grid.append(cell);
       }
+      const future = focusedKey > todayKey;
+      preview.replaceChildren(
+        textNode('strong', new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(focusedKey))),
+        textNode('span', jalaliLabel(focusedKey)),
+        textNode('small', future ? 'Future date · writing opens on this day' : focusedKey === todayKey ? 'Today · open your diary entry' : 'Past entry · read only')
+      );
     };
-    back.addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() - 1); draw(); });
-    forward.addEventListener('click', () => { calendarCursor.setMonth(calendarCursor.getMonth() + 1); draw(); });
+    const changeMonth = amount => { calendarCursor.setMonth(calendarCursor.getMonth() + amount); focusedKey = dateKey(calendarCursor); draw(); };
+    back.addEventListener('click', () => changeMonth(-1));
+    forward.addEventListener('click', () => changeMonth(1));
     draw(); dialog('Calendar · Gregorian + Solar Hijri', body, [{label:'Close',value:null}]);
   }
   function showEntries() {

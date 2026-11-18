@@ -1,3 +1,11 @@
+# ADiaryT 1.4
+
+- Keep one shared bottom navigation bar visible on the diary and full-page calendar.
+- Remove Settings from the navigation bar and three-dot menu.
+- Add direct Dark mode and Clock format options to the three-dot menu on both pages.
+- Persist both preferences without replacing or resetting diary text.
+- Android version 1.4 (version code 14), packaged as `ADiaryT-v1.4.apk`.
+
 # ADiaryT 1.3
 
 - Open the calendar as a full page with a back button, instead of a popup window.

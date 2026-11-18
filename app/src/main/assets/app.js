@@ -119,6 +119,21 @@
   function applyTheme() {
     document.body.classList.toggle('dark', !!settings.dark);
     native('theme', {dark:!!settings.dark});
+    updateMenuPreferences();
+  }
+  function updateMenuPreferences() {
+    $('menuDarkMode').setAttribute('aria-pressed', String(!!settings.dark));
+    $('darkModeValue').textContent = settings.dark ? 'On' : 'Off';
+    $('clockFormatValue').textContent = settings.use24Hour ? '24-hour' : '12-hour';
+  }
+  function updateNavigation() {
+    const calendarOpen = !$('calendarPage').hidden;
+    $('bottomToday').classList.toggle('active', !calendarOpen && selectedKey === todayKey);
+    $('bottomCalendar').classList.toggle('active', calendarOpen);
+    for (const id of ['bottomToday', 'bottomCalendar']) {
+      if ($(id).classList.contains('active')) $(id).setAttribute('aria-current', 'page');
+      else $(id).removeAttribute('aria-current');
+    }
   }
   function currentEntry() { return getEntry(selectedKey); }
   function commitCurrent(stamp) {
@@ -172,7 +187,7 @@
     $('editor').value = entry.text || '';
     $('editor').placeholder = locked ? 'This entry is locked after the day ended.' : 'Write about your day…';
     $('previousDay').disabled = false;
-    $('bottomToday').classList.toggle('active', today);
+    updateNavigation();
     const state = $('saveState'); state.className = locked ? 'save-state locked' : entry.savedAt ? 'save-state saved' : 'save-state';
     state.innerHTML = '<i class="status-dot"></i><span>' + (locked ? 'Locked' : entry.savedAt ? 'Saved' : 'Ready') + '</span>';
     updateSavedAt(entry); updateMeta(); updateLineNumbers();
@@ -208,11 +223,16 @@
     return new Promise(resolve => { dialogResolve = resolve; });
   }
   function finishDialog(value) { $('dialogBackdrop').hidden = true; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
-  function closeMenu() { $('menuPopover').hidden = true; }
+  function closeMenu() {
+    $('menuPopover').hidden = true;
+    for (const button of document.querySelectorAll('[data-open-menu]')) button.setAttribute('aria-expanded', 'false');
+  }
 
   function closeCalendar() {
+    closeMenu();
     $('calendarPage').hidden = true;
     $('app').hidden = false;
+    updateNavigation();
     $('bottomCalendar').focus({preventScroll:true});
   }
   function showCalendar() {
@@ -270,6 +290,7 @@
     $('calendarContent').replaceChildren(body);
     $('app').hidden = true;
     $('calendarPage').hidden = false;
+    updateNavigation();
     $('calendarContent').scrollTop = 0;
     $('calendarBack').focus({preventScroll:true});
   }
@@ -281,18 +302,26 @@
       const entry = entries[key], row = document.createElement('button'); row.className = 'entry-row';
       const main = textNode('span','','entry-row-main'); main.append(textNode('strong',longDate(fromKey(key))));
       main.append(textNode('small',jalaliLabel(key) + (entry.savedAt ? ' · saved ' + nowTime(new Date(entry.savedAt)) : '')));
-      row.append(main,textNode('span',isLocked(key) ? '▣' : '›','row-lock')); row.addEventListener('click', () => { selectDate(key); finishDialog(true); }); body.append(row);
+      row.append(main,textNode('span',isLocked(key) ? '▣' : '›','row-lock')); row.addEventListener('click', () => { selectDate(key); if (!$('calendarPage').hidden) closeCalendar(); finishDialog(true); }); body.append(row);
     }
     dialog('Entries',body,[{label:'Close',value:null}]);
   }
-  function showSettings() {
+  function showClockFormat() {
     closeMenu(); const body = document.createElement('div');
-    const themeRow = document.createElement('div'); themeRow.className = 'settings-row'; themeRow.append(textNode('label','Dark theme'));
-    const theme = document.createElement('input'); theme.type = 'checkbox'; theme.checked = !!settings.dark; themeRow.append(theme); body.append(themeRow);
-    const clockRow = document.createElement('div'); clockRow.className = 'settings-row'; clockRow.append(textNode('label','Clock format'));
-    const clock = document.createElement('select'); clock.innerHTML = '<option value="24">24-hour</option><option value="12">12-hour</option>'; clock.value = settings.use24Hour ? '24' : '12'; clockRow.append(clock); body.append(clockRow);
-    body.append(textNode('p','Diary entries are saved automatically to private on-device storage. At the next date, yesterday becomes read only.','hint'));
-    dialog('Settings',body,[{label:'Cancel',value:false},{label:'Save',value:true,className:'primary'}]).then(ok => { if (!ok) return; settings.dark = theme.checked; settings.use24Hour = clock.value === '24'; applyTheme(); renderDate(); schedulePersist(); showToast('Settings saved'); });
+    const choices = [];
+    for (const [value, label] of [['24', '24-hour'], ['12', '12-hour']]) {
+      const row = textNode('label', '', 'clock-format-row');
+      const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'clock-format'; radio.value = value;
+      radio.checked = value === (settings.use24Hour ? '24' : '12');
+      row.append(radio, document.createTextNode(label)); body.append(row); choices.push(radio);
+    }
+    dialog('Clock format',body,[{label:'Cancel',value:false},{label:'Save',value:true,className:'primary'}]).then(ok => {
+      if (!ok) return;
+      settings.use24Hour = choices.find(input => input.checked).value === '24';
+      renderClock();
+      $('dateSubtitle').textContent = jalaliLabel(selectedKey) + ' · ' + nowTime();
+      updateSavedAt(currentEntry()); updateMenuPreferences(); schedulePersist();
+    });
   }
   function showAbout() {
     closeMenu(); const body = document.createElement('div'); body.append(textNode('p','Diary keeps your writing on this device and works without an account or network connection.'),textNode('p','Dates use your device clock and show both the Gregorian calendar and the Iranian Solar Hijri month.'),textNode('p','When you stop typing, Diary records the current time and saves the entry automatically.')); dialog('About Diary',body);
@@ -306,12 +335,13 @@
   }
   function handleAction(action) {
     switch (action) {
-      case 'previous': selectDate(addDays(selectedKey,-1)); break;
-      case 'next': selectDate(addDays(selectedKey,1)); break;
-      case 'today': selectDate(todayKey); break;
-      case 'calendar': showCalendar(); break;
+      case 'previous': selectDate(addDays(selectedKey,-1)); if (!$('calendarPage').hidden) closeCalendar(); break;
+      case 'next': selectDate(addDays(selectedKey,1)); if (!$('calendarPage').hidden) closeCalendar(); break;
+      case 'today': selectDate(todayKey); if (!$('calendarPage').hidden) closeCalendar(); break;
+      case 'calendar': if ($('calendarPage').hidden) showCalendar(); else closeMenu(); break;
       case 'entries': showEntries(); break;
-      case 'settings': showSettings(); break;
+      case 'darkMode': closeMenu(); settings.dark = !settings.dark; applyTheme(); schedulePersist(); break;
+      case 'clockFormat': showClockFormat(); break;
       case 'about': showAbout(); break;
       case 'export': exportDiary(); break;
     }
@@ -327,7 +357,11 @@
     if (event.type === 'bootstrap') bootstrap(p);
   }
   function bindEvents() {
-    $('menuButton').addEventListener('click', e => { e.stopPropagation(); $('menuPopover').hidden = !$('menuPopover').hidden; });
+    for (const button of document.querySelectorAll('[data-open-menu]')) button.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!$('menuPopover').hidden) { closeMenu(); return; }
+      updateMenuPreferences(); $('menuPopover').hidden = false; button.setAttribute('aria-expanded', 'true');
+    });
     $('menuPopover').addEventListener('click', e => { const button = e.target.closest('[data-action]'); if (button) handleAction(button.dataset.action); });
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
     $('previousDay').addEventListener('click', () => handleAction('previous'));
@@ -336,14 +370,14 @@
     $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));
     $('dialogBackdrop').addEventListener('click', e => { if (e.target === $('dialogBackdrop')) finishDialog(null); });
-    document.addEventListener('click', e => { if (!e.target.closest('#menuPopover') && !e.target.closest('#menuButton')) closeMenu(); });
+    document.addEventListener('click', e => { if (!e.target.closest('#menuPopover') && !e.target.closest('[data-open-menu]')) closeMenu(); });
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && handleBack()) e.preventDefault(); });
     document.addEventListener('visibilitychange', () => { if (document.hidden) flushSession(); }); window.addEventListener('pagehide', flushSession);
   }
   function handleBack() {
     if (!$('dialogBackdrop').hidden) { finishDialog(null); return true; }
-    if (!$('calendarPage').hidden) { closeCalendar(); return true; }
     if (!$('menuPopover').hidden) { closeMenu(); return true; }
+    if (!$('calendarPage').hidden) { closeCalendar(); return true; }
     return false;
   }
   bindEvents();

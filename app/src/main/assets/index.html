@@ -10,12 +10,13 @@
   <script defer src="app.js"></script>
 </head>
 <body>
+<div id="appShell" class="app-shell">
 <div id="app">
   <header class="topbar">
     <div class="brand-mark" aria-hidden="true">✎</div>
     <div class="brand-copy"><strong>Diary</strong><span>private · offline</span></div>
     <div class="top-date" id="topDate" aria-live="polite"></div>
-    <button class="icon-button" id="menuButton" aria-label="Open menu" title="Menu">⋮</button>
+    <button class="icon-button" id="menuButton" data-open-menu aria-label="Open menu" aria-controls="menuPopover" aria-expanded="false" title="Menu"><svg class="menu-dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
   </header>
 
   <section class="date-card" aria-label="Selected diary date">
@@ -43,22 +44,24 @@
     </div>
   </main>
 
-  <nav class="bottom-nav" aria-label="Diary navigation">
-    <button data-action="previous" id="bottomPrevious"><span class="nav-icon">‹</span><span>Previous</span></button>
-    <button data-action="today" id="bottomToday"><span class="nav-icon calendar-icon">●</span><span>Today</span></button>
-    <button data-action="calendar" id="bottomCalendar"><span class="nav-icon">▦</span><span>Calendar</span></button>
-    <button data-action="entries" id="bottomEntries"><span class="nav-icon">☷</span><span>Entries</span></button>
-    <button data-action="settings" id="bottomSettings"><span class="nav-icon">⚙</span><span>Settings</span></button>
-  </nav>
 </div>
 
 <section id="calendarPage" class="calendar-page" hidden aria-label="Calendar">
   <header class="calendar-page-header">
     <button id="calendarBack" aria-label="Back to diary" title="Back to diary">‹</button>
     <strong>Calendar</strong>
+    <button class="icon-button calendar-menu-button" id="calendarMenuButton" data-open-menu aria-label="Open menu" aria-controls="menuPopover" aria-expanded="false" title="Menu"><svg class="menu-dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
   </header>
   <div id="calendarContent" class="calendar-content"></div>
 </section>
+
+<nav class="bottom-nav" aria-label="Diary navigation">
+  <button data-action="previous" id="bottomPrevious"><span class="nav-icon">‹</span><span>Previous</span></button>
+  <button data-action="today" id="bottomToday"><span class="nav-icon calendar-icon">●</span><span>Today</span></button>
+  <button data-action="calendar" id="bottomCalendar"><span class="nav-icon">▦</span><span>Calendar</span></button>
+  <button data-action="entries" id="bottomEntries"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span>Entries</span></button>
+</nav>
+</div>
 
 <div id="menuPopover" class="menu-popover" hidden>
   <button data-action="today">Go to today</button>
@@ -66,7 +69,8 @@
   <button data-action="entries">Browse entries</button>
   <div class="menu-divider"></div>
   <button data-action="export">Export diary</button>
-  <button data-action="settings">Settings</button>
+  <button id="menuDarkMode" data-action="darkMode" aria-pressed="false"><span>Dark mode</span><span id="darkModeValue" class="menu-value">Off</span></button>
+  <button id="menuClockFormat" data-action="clockFormat"><span>Clock format</span><span id="clockFormatValue" class="menu-value">24-hour</span></button>
   <button data-action="about">About Diary</button>
 </div>
 

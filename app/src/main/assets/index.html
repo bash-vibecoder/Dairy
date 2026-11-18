@@ -4,41 +4,72 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>AnoteP</title>
+  <title>Diary</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="vendor/codemirror.css">
   <link rel="stylesheet" href="app.css">
-  <script defer src="vendor/codemirror.js"></script>
-  <script defer src="editor-core.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
 <div id="app">
-  <header class="titlebar">
-    <img src="icon.svg" width="30" height="30" alt="">
-    <strong>AnoteP</strong><span id="windowTitle">new 1</span>
-    <button id="offlineBadge" class="offline" title="About offline storage"><span class="local-dot"></span>Offline</button>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">✎</div>
+    <div class="brand-copy"><strong>Diary</strong><span>private · offline</span></div>
+    <div class="top-date" id="topDate" aria-live="polite"></div>
+    <button class="icon-button" id="menuButton" aria-label="Open menu" title="Menu">⋮</button>
   </header>
-  <nav id="menubar" class="menubar" aria-label="Editor menus">
-    <button data-menu="File">File</button><button data-menu="Edit">Edit</button><button data-menu="Search">Search</button><button data-menu="View">View</button><button data-menu="Encoding">Encoding</button><button data-menu="Language">Language</button><button data-menu="Settings">Settings</button><button data-menu="Macro">Macro</button><button data-menu="Help">?</button>
-  </nav>
-  <nav id="toolbar" class="toolbar" aria-label="Editor tools"></nav>
-  <div class="tabstrip"><div id="tabs" role="tablist" aria-label="Open documents"></div><button id="newTab" title="New document" aria-label="New document">+</button></div>
-  <section id="searchPanel" class="search-panel" hidden aria-label="Find and replace">
-    <div class="search-row"><label for="findInput">Find</label><input id="findInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Find text or regular expression"><button id="findPrev" aria-label="Previous match" title="Previous match">↑</button><button id="findNext" aria-label="Next match" title="Next match">↓</button><button id="closeSearch" aria-label="Close search">×</button></div>
-    <div id="replaceRow" class="search-row" hidden><label for="replaceInput">Replace</label><input id="replaceInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Replacement; regex supports $1, $2, …"><button id="replaceOne">Replace</button><button id="replaceAll">All</button></div>
-    <div class="search-options"><label><input id="matchCase" type="checkbox">Match case</label><label><input id="wholeWord" type="checkbox">Whole word</label><label><input id="useRegex" type="checkbox">Regex</label><span id="matchCount" role="status"></span></div>
+
+  <section class="date-card" aria-label="Selected diary date">
+    <button class="day-arrow" id="previousDay" aria-label="Previous day" title="Previous day">‹</button>
+    <div class="date-main">
+      <div class="date-kicker" id="dateKicker">TODAY</div>
+      <div class="date-title" id="dateTitle">Wednesday, November 18</div>
+      <div class="date-subtitle" id="dateSubtitle">27 Aban 1404 · 14:32</div>
+    </div>
+    <div class="date-state"><span id="lockIcon">●</span><span id="dateStateText">Editable</span></div>
+    <button class="day-arrow" id="nextDay" aria-label="Next day" title="Next day">›</button>
   </section>
-  <main class="workspace">
-    <aside id="sidebar" hidden aria-label="Local folder browser"><div class="panel-heading"><strong>Folder as workspace</strong><button id="chooseFolder" title="Choose folder">…</button><button id="closeFolder" aria-label="Close folder browser">×</button></div><div id="folderTree"></div></aside>
-    <div id="editorPanes"><section id="primaryPane" class="editor-pane" aria-label="Text editor"><div id="editor"></div></section><section id="secondaryPane" class="editor-pane" hidden aria-label="Second view"><div class="split-heading"><span id="splitTitle"></span><button id="closeSplit" aria-label="Close second view">×</button></div><div id="secondEditor"></div></section></div>
+
+  <main class="editor-shell">
+    <div class="editor-heading">
+      <span class="entry-label" id="entryLabel">TODAY'S ENTRY</span>
+      <span class="save-state" id="saveState"><i class="status-dot"></i><span>Ready</span></span>
+    </div>
+    <div class="editor-wrap" id="editorWrap">
+      <div id="lineNumbers" class="line-numbers" aria-hidden="true">1</div>
+      <textarea id="editor" spellcheck="true" autocapitalize="sentences" autocomplete="off" placeholder="Write about your day…" aria-label="Diary entry"></textarea>
+    </div>
+    <div class="editor-footer">
+      <span id="entryMeta">0 words · 0 characters</span>
+      <span id="savedAt">Not saved yet</span>
+    </div>
   </main>
-  <section id="resultsPanel" hidden aria-label="Search results"><div class="panel-heading"><strong id="resultsTitle">Find results</strong><button id="closeResults" aria-label="Close search results">×</button></div><div id="resultsList"></div></section>
-  <div id="keybar" class="keybar" aria-label="Coding keys"></div>
-  <footer class="statusbar"><span id="positionStatus">Ln 1 : Col 1</span><span id="lengthStatus">length: 0 | lines: 1</span><button id="eolStatus" title="Line endings">Windows (CR LF)</button><button id="encodingStatus" title="Encoding">UTF-8</button><button id="languageStatus" title="Language">Normal text</button><span id="insertStatus">INS</span></footer>
+
+  <nav class="bottom-nav" aria-label="Diary navigation">
+    <button data-action="previous" id="bottomPrevious"><span class="nav-icon">‹</span><span>Previous</span></button>
+    <button data-action="today" id="bottomToday"><span class="nav-icon calendar-icon">●</span><span>Today</span></button>
+    <button data-action="calendar" id="bottomCalendar"><span class="nav-icon">▦</span><span>Calendar</span></button>
+    <button data-action="entries" id="bottomEntries"><span class="nav-icon">☷</span><span>Entries</span></button>
+    <button data-action="settings" id="bottomSettings"><span class="nav-icon">⚙</span><span>Settings</span></button>
+  </nav>
 </div>
-<div id="menuPopover" class="menu-popover" hidden role="menu"></div>
-<div id="dialogBackdrop" class="dialog-backdrop" hidden><section id="dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"><header><strong id="dialogTitle"></strong><button id="dialogClose" aria-label="Close dialog">×</button></header><div id="dialogBody"></div><footer id="dialogActions"></footer></section></div>
+
+<div id="menuPopover" class="menu-popover" hidden>
+  <button data-action="today">Go to today</button>
+  <button data-action="calendar">Open calendar</button>
+  <button data-action="entries">Browse entries</button>
+  <div class="menu-divider"></div>
+  <button data-action="export">Export diary</button>
+  <button data-action="settings">Settings</button>
+  <button data-action="about">About Diary</button>
+</div>
+
+<div id="dialogBackdrop" class="dialog-backdrop" hidden>
+  <section id="dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <header><strong id="dialogTitle">Diary</strong><button id="dialogClose" aria-label="Close">×</button></header>
+    <div id="dialogBody"></div>
+    <footer id="dialogActions"></footer>
+  </section>
+</div>
 <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 </body>
 </html>

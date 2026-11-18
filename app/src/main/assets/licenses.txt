@@ -1,4 +1,4 @@
-AnoteP 1.0
+ADiaryT 1.0
 Independent Android editor. Not affiliated with Notepad++.
 
 CodeMirror 5.65.20 (MIT)
@@ -25,4 +25,4 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-AnoteP uses independently drawn artwork inspired by classic notepad and penguin motifs. The Notepad++ source code and original logo are not bundled.
+ADiaryT uses independently drawn artwork inspired by classic notepad and penguin motifs. The Notepad++ source code and original logo are not bundled.

@@ -16,7 +16,7 @@ done
 mkdir -p build/generated build/classes build/dex build/tests dist .tools
 find build/generated build/classes build/dex build/tests -type f -delete
 ANOTEP_MANIFEST=app/src/main/AndroidManifest.xml
-ANOTEP_APK=dist/AnoteP-v1.0.apk
+ANOTEP_APK=dist/ADiaryT-v1.0.apk
 if [[ "${ANOTEP_DEBUG:-0}" == 1 ]]; then
     python3 - <<'PY'
 from pathlib import Path

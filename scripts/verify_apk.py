@@ -15,8 +15,8 @@ assert re.search(r'usesCleartextTraffic[^\n]*0x0', manifest), 'Cleartext traffic
 if 'debug' not in apk.name.lower():
     assert not re.search(r'debuggable[^\n]*0xffffffff', manifest), 'Release must not be debuggable'
 badging = subprocess.check_output(['aapt', 'dump', 'badging', str(apk)], text=True)
-assert "package: name='app.anotep.editor'" in badging
-assert "application-label:'AnoteP'" in badging
+assert "package: name='app.adiaryt'" in badging
+assert "application-label:'ADiaryT'" in badging
 assert "sdkVersion:'26'" in badging
 assert "targetSdkVersion:'34'" in badging
 with ZipFile(apk) as archive:
@@ -32,4 +32,4 @@ with ZipFile(apk) as archive:
         assert 'assets/'+path in names, 'Missing referenced asset: '+path
     assert not any(name.endswith(('.jks', '.keystore')) for name in names), 'Signing keys must not be packaged'
     assert 'res/mipmap-anydpi-v26/ic_launcher.xml' in names, 'Adaptive icon must be packaged'
-print('APK verified: AnoteP, Android 8+, no permissions, backup disabled, all editor assets bundled.')
+print('APK verified: ADiaryT, Android 8+, no permissions, backup disabled, all editor assets bundled.')

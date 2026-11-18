@@ -98,16 +98,34 @@
     return entries[key];
   }
   function validTimestamp(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)); }
+  function localMinuteKey(value) {
+    const date = new Date(value);
+    return [date.getFullYear(),date.getMonth(),date.getDate(),date.getHours(),date.getMinutes()].join(':');
+  }
+  function normalizeSaveLog(log) {
+    const result = [];
+    for (const item of log) {
+      if (!item || !validTimestamp(item.at)) continue;
+      const source = item.source === 'legacy' ? 'legacy' : 'autosave';
+      const count = source === 'autosave' && Number.isSafeInteger(item.count) && item.count > 0 ? item.count : 1;
+      const normalized = {at:item.at, source, line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null, count};
+      const previous = result[result.length - 1];
+      if (source === 'autosave' && previous?.source === 'autosave' && localMinuteKey(previous.at) === localMinuteKey(item.at)) {
+        previous.at = item.at;
+        previous.line = normalized.line || previous.line;
+        previous.count += count;
+      } else result.push(normalized);
+    }
+    return result;
+  }
   function migrateDocuments(state) {
     const result = {};
     if (state && state.entries && typeof state.entries === 'object') {
       for (const [key, value] of Object.entries(state.entries)) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !value || typeof value !== 'object') continue;
         const savedAt = validTimestamp(value.savedAt) ? value.savedAt : validTimestamp(value.updatedAt) ? value.updatedAt : '';
-        const saveLog = Array.isArray(value.saveLog) ? value.saveLog
-          .filter(item => item && validTimestamp(item.at))
-          .map(item => ({at:item.at, source:item.source === 'legacy' ? 'legacy' : 'autosave', line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null})) : [];
-        if (!saveLog.length && savedAt) saveLog.push({at:savedAt, source:'legacy', line:null});
+        const saveLog = Array.isArray(value.saveLog) ? normalizeSaveLog(value.saveLog) : [];
+        if (!saveLog.length && savedAt) saveLog.push({at:savedAt, source:'legacy', line:null, count:1});
         result[key] = {key, text:typeof value.text === 'string' ? value.text : '', savedAt,
           updatedAt:validTimestamp(value.updatedAt) ? value.updatedAt : savedAt, saveLog};
       }
@@ -163,7 +181,11 @@
     if (entry.text === text) { pendingSaveLine = null; return false; }
     const at = isoNow();
     entry.text = text; entry.updatedAt = at; entry.savedAt = at;
-    entry.saveLog.push({at, source:'autosave', line:pendingSaveLine || editorLine()});
+    const line = pendingSaveLine || editorLine();
+    const latest = entry.saveLog[entry.saveLog.length - 1];
+    if (latest?.source === 'autosave' && localMinuteKey(latest.at) === localMinuteKey(at)) {
+      latest.at = at; latest.line = line; latest.count = (latest.count || 1) + 1;
+    } else entry.saveLog.push({at, source:'autosave', line, count:1});
     pendingSaveLine = null;
     updateSavedAt(entry); refreshAutosaveLog();
     return true;
@@ -259,21 +281,25 @@
       return body;
     }
     const hasLegacy = log.some(item => item.source === 'legacy');
-    body.append(textNode('p', log.length + (hasLegacy ? ' saved time' : ' autosave') + (log.length === 1 ? '' : 's') + ' · newest first', 'hint'));
+    const autoCount = log.reduce((sum,item) => sum + (item.source === 'autosave' ? item.count || 1 : 0), 0);
+    const minuteCount = log.filter(item => item.source === 'autosave').length;
+    const summary = [autoCount + (autoCount === 1 ? ' autosave' : ' autosaves'), minuteCount + (minuteCount === 1 ? ' minute' : ' minutes'), 'newest first'].join(' · ');
+    body.append(textNode('p', summary + (hasLegacy ? ' · plus last known save' : ''), 'hint'));
     const list = textNode('ol', '', 'autosave-log-list');
     for (const item of [...log].reverse()) {
       const row = textNode('li', '', 'autosave-log-row');
       const at = new Date(item.at);
-      const time = textNode('time', new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:!settings.use24Hour}).format(at));
+      const time = textNode('time', new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at));
       time.dateTime = item.at;
       const details = textNode('span', '', 'autosave-log-details');
-      details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', item.source === 'legacy' ? 'Last known save' : 'Autosaved', 'hint'));
+      const description = item.source === 'legacy' ? 'Last known save' : (item.count || 1) + ((item.count || 1) === 1 ? ' autosave this minute' : ' autosaves this minute');
+      details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', description, 'hint'));
       row.append(time, details);
       if (dateKey(at) !== key) row.append(textNode('small', new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'numeric'}).format(at), 'hint'));
       list.append(row);
     }
     body.append(list);
-    body.append(textNode('p', 'Line numbers show where the last edit ended. Each autosave saves the whole entry.', 'hint autosave-log-note'));
+    body.append(textNode('p', 'Autosaves are grouped by minute. The line shows where the last edit ended; each autosave saves the whole entry.', 'hint autosave-log-note'));
     if (hasLegacy) body.append(textNode('p', 'Earlier app versions kept only the last saved time. Older autosave times are unavailable.', 'hint autosave-legacy-note'));
     return body;
   }

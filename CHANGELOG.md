@@ -1,7 +1,14 @@
+# ADiaryT 1.6
+
+- Show autosave history at minute-level precision, grouping saves within the same minute and displaying their count and last edited line.
+- Keep saving entry text at each autosave and preserve the exact last save time internally; seconds no longer make duplicate visible rows.
+- Merge existing same-minute log entries when loading older saved state.
+- Android version 1.6 (version code 16), packaged as `ADiaryT-v1.6.apk`.
+
 # ADiaryT 1.5
 
 - Tap the saved time at the bottom right to open the selected day's autosave time log.
-- Keep time logs on the device across restarts, with newest times first, seconds, and the chosen 12-hour or 24-hour clock format.
+- Keep time logs on the device across restarts, with newest times first and the chosen 12-hour or 24-hour clock format.
 - Include the line where the last edit ended with each new autosave; show “Line not recorded” for older saves that have no line metadata.
 - Record saves when text actually changes, including clearing text and saving pending edits when leaving the day or backgrounding the app.
 - Preserve the last known save time from older app versions, clearly noting that earlier times were not recorded.

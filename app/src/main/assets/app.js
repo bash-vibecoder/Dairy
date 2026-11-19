@@ -3,6 +3,7 @@
 
   const $ = id => document.getElementById(id);
   const STORAGE_KEY = 'diary-offline-v1';
+  const SAVE_LOG_MINUTES = 5;
   const MONTHS = ['Farvardin','Ordibehesht','Khordad','Tir','Mordad','Shahrivar','Mehr','Aban','Azar','Dey','Bahman','Esfand'];
   const WEEKDAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const defaults = {dark:false, use24Hour:true};
@@ -99,9 +100,16 @@
     return entries[key];
   }
   function validTimestamp(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)); }
-  function localMinuteKey(value) {
+  function localSaveBlockKey(value) {
     const date = new Date(value);
-    return [date.getFullYear(),date.getMonth(),date.getDate(),date.getHours(),date.getMinutes()].join(':');
+    return [date.getFullYear(),date.getMonth(),date.getDate(),date.getHours(),Math.floor(date.getMinutes()/SAVE_LOG_MINUTES)].join(':');
+  }
+  function saveBlockLabel(value) {
+    const start = new Date(value);
+    start.setMinutes(Math.floor(start.getMinutes()/SAVE_LOG_MINUTES)*SAVE_LOG_MINUTES,0,0);
+    const end = new Date(start);
+    end.setMinutes(start.getMinutes()+SAVE_LOG_MINUTES-1);
+    return nowTime(start) + '–' + nowTime(end);
   }
   function normalizeSaveLog(log) {
     const result = [];
@@ -113,7 +121,7 @@
       const normalized = {at:item.at, source, line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null, count,
         changesKnown:item.changesKnown === true, additions};
       const previous = result[result.length - 1];
-      if (source === 'autosave' && previous?.source === 'autosave' && localMinuteKey(previous.at) === localMinuteKey(item.at)) {
+      if (source === 'autosave' && previous?.source === 'autosave' && localSaveBlockKey(previous.at) === localSaveBlockKey(item.at)) {
         previous.at = item.at;
         previous.line = normalized.line || previous.line;
         previous.count += count;
@@ -267,7 +275,7 @@
     entry.text = text; entry.updatedAt = at; entry.savedAt = at;
     const line = pendingSaveLine || editorLine();
     const latest = entry.saveLog[entry.saveLog.length - 1];
-    if (latest?.source === 'autosave' && localMinuteKey(latest.at) === localMinuteKey(at)) {
+    if (latest?.source === 'autosave' && localSaveBlockKey(latest.at) === localSaveBlockKey(at)) {
       latest.at = at; latest.line = line; latest.count = (latest.count || 1) + 1;
       removeAddedWords(latest.additions,changes.removed);
       appendAddedWords(latest.additions,changes.added);
@@ -372,31 +380,31 @@
     }
     const hasLegacy = log.some(item => item.source === 'legacy');
     const autoCount = log.reduce((sum,item) => sum + (item.source === 'autosave' ? item.count || 1 : 0), 0);
-    const minuteCount = log.filter(item => item.source === 'autosave').length;
-    const summary = [autoCount + (autoCount === 1 ? ' autosave' : ' autosaves'), minuteCount + (minuteCount === 1 ? ' minute' : ' minutes'), 'newest first'].join(' · ');
+    const blockCount = log.filter(item => item.source === 'autosave').length;
+    const summary = [autoCount + (autoCount === 1 ? ' autosave' : ' autosaves'), blockCount + (blockCount === 1 ? ' five-minute block' : ' five-minute blocks'), 'newest first'].join(' · ');
     body.append(textNode('p', summary + (hasLegacy ? ' · plus last known save' : ''), 'hint'));
     const list = textNode('ol', '', 'autosave-log-list');
     for (let index=log.length-1;index>=0;index--) {
       const item=log[index];
       const row = textNode('li', '', 'autosave-log-row');
       const at = new Date(item.at);
-      const formattedTime=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at);
+      const formattedTime=item.source === 'legacy' ? nowTime(at) : saveBlockLabel(item.at);
       const timeButton=textNode('button','','autosave-minute-link');
       const time = textNode('time', formattedTime);
       time.dateTime = item.at;
       timeButton.setAttribute('aria-label','Show words added during '+formattedTime);
-      timeButton.title='Show words added during this minute';
+      timeButton.title=item.source === 'legacy' ? 'Show words added at this save' : 'Show words added during this five-minute block';
       timeButton.append(time);
       timeButton.addEventListener('click',()=>showMinuteAdditions(key,index));
       const details = textNode('span', '', 'autosave-log-details');
-      const description = item.source === 'legacy' ? 'Last known save' : (item.count || 1) + ((item.count || 1) === 1 ? ' autosave this minute' : ' autosaves this minute');
+      const description = item.source === 'legacy' ? 'Last known save' : (item.count || 1) + ((item.count || 1) === 1 ? ' autosave in this block' : ' autosaves in this block');
       details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', description, 'hint'));
       row.append(timeButton, details);
       if (dateKey(at) !== key) row.append(textNode('small', new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'numeric'}).format(at), 'hint'));
       list.append(row);
     }
     body.append(list);
-    body.append(textNode('p', 'Autosaves are grouped by minute. The line shows where the last edit ended; each autosave saves the whole entry.', 'hint autosave-log-note'));
+    body.append(textNode('p', 'Autosaves are grouped into five-minute blocks (00–04, 05–09, and so on). Text still saves after typing pauses. The line shows where the last edit ended; each autosave saves the whole entry.', 'hint autosave-log-note'));
     if (hasLegacy) body.append(textNode('p', 'Earlier app versions kept only the last saved time. Older autosave times are unavailable.', 'hint autosave-legacy-note'));
     return body;
   }
@@ -437,7 +445,7 @@
     if(key!==selectedKey){if(!$('calendarPage').hidden)closeCalendar();selectedKey=key;renderDate();persistNow();}
     if(!minute.changesKnown&&!minute.additions.length){showToast('Word history is unavailable for this older save.');return;}
     const text=$('editor').value,ranges=locateMinuteAdditions(text,minute);
-    if(!ranges.length){showToast('No words from this autosave minute are in the current entry.');return;}
+    if(!ranges.length){showToast('No words from this autosave block are in the current entry.');return;}
     const overlay=$('editorHighlight'),fragment=document.createDocumentFragment();
     let cursor=0;
     for(const range of ranges){

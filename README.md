@@ -10,8 +10,9 @@ ADiaryT is a private, fully offline Android diary with a Notepad++-inspired writ
 - Uses the device clock and date
 - Shows Gregorian dates alongside Iranian Solar Hijri months
 - The current entry autosaves after typing pauses and records the save time
-- Tap the saved time at the bottom right to see that day's autosave minutes with a save count, the last edited line, and your chosen clock format
-- Tap a minute in the autosave log to see the words added during it; new words highlight green for five seconds, including additions to earlier lines
+- Tap the saved time at the bottom right to see that day's autosaves grouped into five-minute blocks (for example, 18:30–18:34), with a save count, the last edited line, and your chosen clock format
+- Tap a block in the autosave log to see the words added during those five minutes; the log closes and new words highlight green in the diary for five seconds, including additions to earlier lines
+- Text still autosaves after typing pauses; existing one-minute logs combine into five-minute blocks when loaded
 - Uses locally bundled Lora and Noto Naskh Arabic fonts for readable English and Persian diary text
 - Autosave time logs stay on the device and survive restarts; older entries can show only the last time recorded by earlier app versions
 - Previous dates become read-only after the day changes
@@ -30,9 +31,9 @@ The build is offline and uses the Android tools already configured in this works
 bash scripts/build.sh
 ```
 
-The current release is **1.9** (Android version code **19**), written to `dist/ADiaryT-v1.9.apk`.
+The current release is **1.10** (Android version code **20**), written to `dist/ADiaryT-v1.10.apk`.
 
-For the next release, use **1.10** with a higher Android version code (for example, **20**), then **1.11**, and so on. Set `android:versionName` and `android:versionCode` in `app/src/main/AndroidManifest.xml`. The build derives the APK filename from that version and verifies the packaged version and filename match. GitHub release tags and assets use the same version, such as `v1.9` and `ADiaryT-v1.9.apk`.
+For the next release, use **1.11** with a higher Android version code (for example, **21**), then **1.12**, and so on. Set `android:versionName` and `android:versionCode` in `app/src/main/AndroidManifest.xml`. The build derives the APK filename from that version and verifies the packaged version and filename match. GitHub release tags and assets use the same version, such as `v1.10` and `ADiaryT-v1.10.apk`.
 
 Calendar integration checks use a separately installed Playwright browser:
 

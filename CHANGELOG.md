@@ -1,3 +1,10 @@
+# ADiaryT 1.10
+
+- Combine autosave history and added words into five-minute blocks, such as 18:30–18:34 and 18:35–18:39, instead of one entry per minute.
+- Merge existing one-minute logs into five-minute blocks while retaining save counts, word anchors, and the latest edited line and save timestamp.
+- Keep normal autosaving after typing pauses; tapping a block closes the log and highlights its surviving added words directly in the diary for five seconds.
+- Android version 1.10 (version code 20), packaged as `ADiaryT-v1.10.apk`.
+
 # ADiaryT 1.9
 
 - Tapping a save time closes the log and highlights new words directly inside the diary text for five seconds.

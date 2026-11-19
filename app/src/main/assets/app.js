@@ -20,6 +20,7 @@
   let calendarCursor = new Date();
   let dialogResolve = null;
   let autosaveLogKey = '';
+  let addedWordsTimer = 0;
   let requestCounter = 0;
   const pending = new Map();
 
@@ -108,12 +109,16 @@
       if (!item || !validTimestamp(item.at)) continue;
       const source = item.source === 'legacy' ? 'legacy' : 'autosave';
       const count = source === 'autosave' && Number.isSafeInteger(item.count) && item.count > 0 ? item.count : 1;
-      const normalized = {at:item.at, source, line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null, count};
+      const additions = Array.isArray(item.additions) ? item.additions.filter(addition => addition && Number.isSafeInteger(addition.line) && addition.line > 0 && Array.isArray(addition.words)).map(addition => ({line:addition.line,words:addition.words.filter(word => typeof word === 'string' && word.length > 0)})).filter(addition => addition.words.length) : [];
+      const normalized = {at:item.at, source, line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null, count,
+        changesKnown:item.changesKnown === true, additions};
       const previous = result[result.length - 1];
       if (source === 'autosave' && previous?.source === 'autosave' && localMinuteKey(previous.at) === localMinuteKey(item.at)) {
         previous.at = item.at;
         previous.line = normalized.line || previous.line;
         previous.count += count;
+        previous.changesKnown = previous.changesKnown && normalized.changesKnown;
+        previous.additions.push(...additions);
       } else result.push(normalized);
     }
     return result;
@@ -147,7 +152,7 @@
     entries = migrateDocuments(state || {});
     // The current entry is created on first launch; older entries are permanently read-only.
     getEntry(todayKey);
-    selectedKey = state && state.selectedKey && state.selectedKey <= todayKey ? state.selectedKey : todayKey;
+    selectedKey = state && state.selectedKey === todayKey ? state.selectedKey : todayKey;
     for (const key of Object.keys(entries)) if (isLocked(key)) entries[key].locked = true;
     restored = true; loading = false;
     applyTheme(); renderDate(); renderClock(); schedulePersist();
@@ -174,18 +179,73 @@
   }
   function currentEntry() { return getEntry(selectedKey); }
   function editorLine() { return $('editor').value.slice(0, $('editor').selectionEnd).split('\n').length; }
+  function wordTokens(value) {
+    const tokens = [], expression = /[\p{L}\p{M}\p{N}_]+/gu;
+    let match, line = 1, consumed = 0;
+    while ((match = expression.exec(value))) {
+      const prefix = value.slice(consumed,match.index);
+      for (let i=0;i<prefix.length;i++) if (prefix.charCodeAt(i)===10) line++;
+      tokens.push({word:match[0],line}); consumed=match.index+match[0].length;
+    }
+    return tokens;
+  }
+  function addedWords(previous, next) {
+    const oldTokens=wordTokens(previous), newTokens=wordTokens(next);
+    let start=0;
+    while(start<oldTokens.length && start<newTokens.length && oldTokens[start].word===newTokens[start].word) start++;
+    let oldEnd=oldTokens.length,newEnd=newTokens.length;
+    while(oldEnd>start && newEnd>start && oldTokens[oldEnd-1].word===newTokens[newEnd-1].word) { oldEnd--;newEnd--; }
+    const a=oldTokens.slice(start,oldEnd),b=newTokens.slice(start,newEnd);
+    if(!b.length)return [];
+    const oldCounts=new Map();for(const token of a)oldCounts.set(token.word,(oldCounts.get(token.word)||0)+1);
+    const frequencyFallback=()=>{const left=new Map(oldCounts),result=[];for(const token of b){const count=left.get(token.word)||0;if(count)left.set(token.word,count-1);else result.push(token);}return result;};
+    const furthest=new Map([[1,0]]),trace=[],limit=Math.min(a.length+b.length,512);
+    for(let distance=0;distance<=limit;distance++){
+      trace.push(new Map(furthest));
+      for(let diagonal=-distance;diagonal<=distance;diagonal+=2){
+        let x;
+        if(diagonal===-distance || (diagonal!==distance && (furthest.get(diagonal-1)??-Infinity)<(furthest.get(diagonal+1)??-Infinity)))x=furthest.get(diagonal+1)||0;
+        else x=(furthest.get(diagonal-1)||0)+1;
+        let y=x-diagonal;
+        while(x<a.length&&y<b.length&&a[x].word===b[y].word){x++;y++;}
+        furthest.set(diagonal,x);
+        if(x<a.length||y<b.length)continue;
+        const result=[];
+        for(let step=distance;step>0;step--){
+          const before=trace[step],k=x-y;
+          const previousK=(k===-step || (k!==step&&(before.get(k-1)??-Infinity)<(before.get(k+1)??-Infinity)))?k+1:k-1;
+          const previousX=before.get(previousK)??0,previousY=previousX-previousK;
+          while(x>previousX&&y>previousY){x--;y--;}
+          if(x===previousX){y--;result.push(b[y]);}else x--;
+        }
+        return result.reverse();
+      }
+    }
+    return frequencyFallback();
+  }
+  function appendAddedWords(target, words) {
+    for(const item of words){
+      let group=target[target.length-1];
+      if(!group||group.line!==item.line){group={line:item.line,words:[]};target.push(group);}
+      group.words.push(item.word);
+    }
+  }
   function commitCurrent() {
     if (!restored || selectedKey !== todayKey || !$('editor')) { pendingSaveLine = null; return false; }
     const entry = currentEntry();
     const text = $('editor').value;
     if (entry.text === text) { pendingSaveLine = null; return false; }
-    const at = isoNow();
+    const at = isoNow(), additions = addedWords(entry.text,text);
     entry.text = text; entry.updatedAt = at; entry.savedAt = at;
     const line = pendingSaveLine || editorLine();
     const latest = entry.saveLog[entry.saveLog.length - 1];
     if (latest?.source === 'autosave' && localMinuteKey(latest.at) === localMinuteKey(at)) {
       latest.at = at; latest.line = line; latest.count = (latest.count || 1) + 1;
-    } else entry.saveLog.push({at, source:'autosave', line, count:1});
+      appendAddedWords(latest.additions,additions);
+    } else {
+      const log={at,source:'autosave',line,count:1,changesKnown:true,additions:[]};
+      appendAddedWords(log.additions,additions);entry.saveLog.push(log);
+    }
     pendingSaveLine = null;
     updateSavedAt(entry); refreshAutosaveLog();
     return true;
@@ -242,8 +302,8 @@
       // Re-evaluate the lock boundary whenever the app remains open over midnight.
       clearTimeout(typingTimer); commitCurrent();
       todayKey = key;
+      selectedKey = todayKey;
       for (const date of Object.keys(entries)) if (isLocked(date)) entries[date].locked = true;
-      if (selectedKey > todayKey) selectedKey = todayKey;
       getEntry(todayKey); renderDate(); schedulePersist();
     } else if (selectedKey === todayKey) {
       const j = jalaliForKey(selectedKey);
@@ -264,7 +324,7 @@
     $('dialogBackdrop').hidden = false;
     return new Promise(resolve => { dialogResolve = resolve; });
   }
-  function finishDialog(value) { $('dialogBackdrop').hidden = true; autosaveLogKey = ''; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
+  function finishDialog(value) { $('dialogBackdrop').hidden = true; clearTimeout(addedWordsTimer); addedWordsTimer = 0; autosaveLogKey = ''; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
   function closeMenu() {
     $('menuPopover').hidden = true;
     for (const button of document.querySelectorAll('[data-open-menu]')) button.setAttribute('aria-expanded', 'false');
@@ -286,15 +346,22 @@
     const summary = [autoCount + (autoCount === 1 ? ' autosave' : ' autosaves'), minuteCount + (minuteCount === 1 ? ' minute' : ' minutes'), 'newest first'].join(' · ');
     body.append(textNode('p', summary + (hasLegacy ? ' · plus last known save' : ''), 'hint'));
     const list = textNode('ol', '', 'autosave-log-list');
-    for (const item of [...log].reverse()) {
+    for (let index=log.length-1;index>=0;index--) {
+      const item=log[index];
       const row = textNode('li', '', 'autosave-log-row');
       const at = new Date(item.at);
-      const time = textNode('time', new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at));
+      const formattedTime=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at);
+      const timeButton=textNode('button','','autosave-minute-link');
+      const time = textNode('time', formattedTime);
       time.dateTime = item.at;
+      timeButton.setAttribute('aria-label','Show words added during '+formattedTime);
+      timeButton.title='Show words added during this minute';
+      timeButton.append(time);
+      timeButton.addEventListener('click',()=>showMinuteAdditions(key,index));
       const details = textNode('span', '', 'autosave-log-details');
       const description = item.source === 'legacy' ? 'Last known save' : (item.count || 1) + ((item.count || 1) === 1 ? ' autosave this minute' : ' autosaves this minute');
       details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', description, 'hint'));
-      row.append(time, details);
+      row.append(timeButton, details);
       if (dateKey(at) !== key) row.append(textNode('small', new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'numeric'}).format(at), 'hint'));
       list.append(row);
     }
@@ -306,10 +373,49 @@
   function refreshAutosaveLog() {
     if (autosaveLogKey && !$('dialogBackdrop').hidden) $('dialogBody').replaceChildren(autosaveLogBody(autosaveLogKey));
   }
-  function showAutosaveLog() {
+  function addedWordsBody(entry,minute) {
+    const body=textNode('div','','added-words-view');
+    body.append(textNode('p',new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(entry.key))+' · '+jalaliLabel(entry.key),'hint'));
+    if(!minute.changesKnown&&!minute.additions.length){
+      body.append(textNode('p','Word changes were not recorded for this save by the earlier app version.','hint'));
+      return {body,marks:[]};
+    }
+    if(!minute.additions.length){
+      body.append(textNode('p','No new words were added during this minute.','hint'));
+      return {body,marks:[]};
+    }
+    body.append(textNode('p',(minute.count||1)+((minute.count||1)===1?' save':' saves')+' during this minute. New words are highlighted for five seconds.','hint'));
+    const combined=new Map();
+    for(const item of minute.additions){
+      let words=combined.get(item.line);
+      if(!words){words=[];combined.set(item.line,words);}
+      words.push(...item.words);
+    }
+    const list=textNode('div','','added-words-list'),marks=[];
+    for(const [lineNumber,groupWords] of [...combined.entries()].sort((a,b)=>a[0]-b[0])){
+      const row=textNode('div','','added-words-line');
+      row.append(textNode('span','Line '+lineNumber,'added-words-line-number'));
+      const words=textNode('p','','added-words-text');
+      groupWords.forEach((word,index)=>{if(index)words.append(document.createTextNode(' '));const mark=textNode('mark',word,'added-word-highlight highlighted');words.append(mark);marks.push(mark);});
+      row.append(words);list.append(row);
+    }
+    body.append(list);
+    if(!minute.changesKnown)body.append(textNode('p','Earlier app versions did not record word changes for this minute. Only words added after this update are shown.','hint'));
+    return {body,marks};
+  }
+  function showMinuteAdditions(key,index) {
+    const entry=getEntry(key),minute=entry.saveLog[index];
+    if(!minute)return;
+    clearTimeout(addedWordsTimer);
+    const {body,marks}=addedWordsBody(entry,minute);
+    const at=new Date(minute.at),formattedTime=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at);
+    dialog('Words added · '+formattedTime,body,[{label:'Back',value:'back'},{label:'Close',value:null}]).then(value=>{if(value==='back')showAutosaveLog(key);});
+    if(marks.length)addedWordsTimer=setTimeout(()=>{for(const mark of marks)mark.classList.remove('highlighted');addedWordsTimer=0;},5000);
+  }
+  function showAutosaveLog(key=selectedKey) {
     closeMenu();
-    autosaveLogKey = selectedKey;
-    dialog('Autosave times', autosaveLogBody(selectedKey), [{label:'Close',value:null}]);
+    autosaveLogKey = key;
+    dialog('Autosave times', autosaveLogBody(key), [{label:'Close',value:null}]);
   }
 
   function closeCalendar() {
@@ -450,7 +556,8 @@
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
     $('previousDay').addEventListener('click', () => handleAction('previous'));
     $('calendarBack').addEventListener('click', closeCalendar);
-    $('savedAt').addEventListener('click', showAutosaveLog);
+    $('savedAt').addEventListener('click', () => showAutosaveLog());
+    $('savedAt').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showAutosaveLog(); } });
     $('editor').addEventListener('input', () => { updateMeta(); updateLineNumbers(); scheduleAutosave(); });
     $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));

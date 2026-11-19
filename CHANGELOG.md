@@ -1,5 +1,22 @@
+# ADiaryT 1.8
+
+- Automatically show today’s entry when a new local device date begins, whether ADiaryT stays open across midnight or is reopened later.
+- Keep yesterday’s saved entry intact and read only in the entry history.
+- Android version 1.8 (version code 18), packaged as `ADiaryT-v1.8.apk`.
+
+# ADiaryT 1.7
+
+- Tap an autosave minute to view words added during it, grouped by the actual edited line; new words highlight green for five seconds.
+- Track additions inserted into earlier lines without repeating unchanged later words.
+- Mark word history from older builds as unavailable rather than guessing.
+- Bundle Lora and Noto Naskh Arabic fonts and their SIL notices locally for offline English and Persian diary text.
+- Android version 1.7 (version code 17), packaged as `ADiaryT-v1.7.apk`.
+
 # ADiaryT 1.6
 
+- Tap an autosave minute to view words added in that minute, grouped by edited line; highlight additions green for five seconds.
+- Track word additions across edits anywhere in the entry, including changes inserted into earlier lines.
+- Bundle Lora for Latin diary prose and Noto Naskh Arabic for Persian/Arabic text, under the SIL Open Font License 1.1, for offline use.
 - Show autosave history at minute-level precision, grouping saves within the same minute and displaying their count and last edited line.
 - Keep saving entry text at each autosave and preserve the exact last save time internally; seconds no longer make duplicate visible rows.
 - Merge existing same-minute log entries when loading older saved state.

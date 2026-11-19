@@ -64,7 +64,7 @@ public final class MainActivity extends Activity {
                 if ("/".equals(path)) path = "/index.html";
                 String asset = path.substring(1);
                 try {
-                    String mime = asset.endsWith(".html") ? "text/html" : asset.endsWith(".js") ? "application/javascript" : asset.endsWith(".css") ? "text/css" : asset.endsWith(".svg") ? "image/svg+xml" : "text/plain";
+                    String mime = asset.endsWith(".html") ? "text/html" : asset.endsWith(".js") ? "application/javascript" : asset.endsWith(".css") ? "text/css" : asset.endsWith(".svg") ? "image/svg+xml" : asset.endsWith(".ttf") ? "font/ttf" : "text/plain";
                     java.util.HashMap<String,String> headers = new java.util.HashMap<>();
                     headers.put("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'");
                     headers.put("X-Content-Type-Options", "nosniff");

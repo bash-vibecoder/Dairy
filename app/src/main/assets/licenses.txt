@@ -26,3 +26,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ADiaryT uses independently drawn artwork inspired by classic notepad and penguin motifs. The Notepad++ source code and original logo are not bundled.
+
+ADiaryT typography:
+- Lora, Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora)
+- Noto Naskh Arabic, Copyright 2012 The Noto Project Authors (https://github.com/notofonts/arabic)
+- Both fonts are licensed under the SIL Open Font License 1.1. Their font files and full license notices are in assets/fonts/.

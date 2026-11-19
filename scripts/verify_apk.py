@@ -32,6 +32,8 @@ with ZipFile(apk) as archive:
     names = set(archive.namelist())
     for name in ['classes.dex', 'assets/index.html', 'assets/app.css', 'assets/app.js',
                  'assets/editor-core.js', 'assets/icon.svg', 'assets/licenses.txt',
+                 'assets/fonts/Lora[wght].ttf', 'assets/fonts/Lora-OFL.txt',
+                 'assets/fonts/NotoNaskhArabic[wght].ttf', 'assets/fonts/NotoNaskhArabic-OFL.txt',
                  'assets/vendor/codemirror.js', 'assets/vendor/codemirror.css',
                  'assets/vendor/LICENSE-CodeMirror.txt']:
         assert name in names, 'Missing packaged file: '+name
@@ -39,6 +41,9 @@ with ZipFile(apk) as archive:
     for path in re.findall(r'(?:src|href)="([^"#]+)"', html):
         assert not path.startswith(('http:', 'https:', '//')), 'Remote asset: '+path
         assert 'assets/'+path in names, 'Missing referenced asset: '+path
+    css = archive.read('assets/app.css').decode()
+    for font in ['fonts/Lora[wght].ttf', 'fonts/NotoNaskhArabic[wght].ttf']:
+        assert font in css, 'Missing offline font reference: '+font
     assert not any(name.endswith(('.jks', '.keystore')) for name in names), 'Signing keys must not be packaged'
     assert 'res/mipmap-anydpi-v26/ic_launcher.xml' in names, 'Adaptive icon must be packaged'
 print(f'APK verified: ADiaryT {version} (code {version_code}), matching filename, Android 8+, no permissions, backup disabled, all assets bundled.')

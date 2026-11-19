@@ -1,3 +1,11 @@
+# ADiaryT 1.9
+
+- Tapping a save time closes the log and highlights new words directly inside the diary text for five seconds.
+- Keep the diary visible during review, including words added above earlier paragraphs; hide the highlight when typing or switching entries.
+- Remove highlighted additions when the user deletes or replaces them before the minute's next autosave.
+- Clear inline review marks when typing, switching dates, or after five seconds; no separate word-results window.
+- Android version 1.9 (version code 19), packaged as `ADiaryT-v1.9.apk`.
+
 # ADiaryT 1.8
 
 - Automatically show today’s entry when a new local device date begins, whether ADiaryT stays open across midnight or is reopened later.

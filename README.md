@@ -30,9 +30,9 @@ The build is offline and uses the Android tools already configured in this works
 bash scripts/build.sh
 ```
 
-The current release is **1.8** (Android version code **18**), written to `dist/ADiaryT-v1.8.apk`.
+The current release is **1.9** (Android version code **19**), written to `dist/ADiaryT-v1.9.apk`.
 
-For the next release, use **1.9** with a higher Android version code (for example, **19**), then **1.10**, and so on. Set `android:versionName` and `android:versionCode` in `app/src/main/AndroidManifest.xml`. The build derives the APK filename from that version and verifies the packaged version and filename match. GitHub release tags and assets use the same version, such as `v1.8` and `ADiaryT-v1.8.apk`.
+For the next release, use **1.10** with a higher Android version code (for example, **20**), then **1.11**, and so on. Set `android:versionName` and `android:versionCode` in `app/src/main/AndroidManifest.xml`. The build derives the APK filename from that version and verifies the packaged version and filename match. GitHub release tags and assets use the same version, such as `v1.9` and `ADiaryT-v1.9.apk`.
 
 Calendar integration checks use a separately installed Playwright browser:
 

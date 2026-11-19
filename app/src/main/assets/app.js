@@ -109,7 +109,7 @@
       if (!item || !validTimestamp(item.at)) continue;
       const source = item.source === 'legacy' ? 'legacy' : 'autosave';
       const count = source === 'autosave' && Number.isSafeInteger(item.count) && item.count > 0 ? item.count : 1;
-      const additions = Array.isArray(item.additions) ? item.additions.filter(addition => addition && Number.isSafeInteger(addition.line) && addition.line > 0 && Array.isArray(addition.words)).map(addition => ({line:addition.line,words:addition.words.filter(word => typeof word === 'string' && word.length > 0)})).filter(addition => addition.words.length) : [];
+      const additions = Array.isArray(item.additions) ? item.additions.filter(addition => addition && Number.isSafeInteger(addition.line) && addition.line > 0 && Array.isArray(addition.words)).map(addition => ({line:addition.line,words:addition.words.filter(word => typeof word === 'string' && word.length > 0),anchors:Array.isArray(addition.anchors)?addition.anchors.filter(anchor=>anchor&&typeof anchor.word==='string'&&Number.isSafeInteger(anchor.line)&&Array.isArray(anchor.before)&&Array.isArray(anchor.after)).map(anchor=>({word:anchor.word,line:anchor.line,before:anchor.before.slice(-2),after:anchor.after.slice(0,2)})):[]})).filter(addition => addition.words.length) : [];
       const normalized = {at:item.at, source, line:Number.isSafeInteger(item.line) && item.line > 0 ? item.line : null, count,
         changesKnown:item.changesKnown === true, additions};
       const previous = result[result.length - 1];
@@ -185,20 +185,27 @@
     while ((match = expression.exec(value))) {
       const prefix = value.slice(consumed,match.index);
       for (let i=0;i<prefix.length;i++) if (prefix.charCodeAt(i)===10) line++;
-      tokens.push({word:match[0],line}); consumed=match.index+match[0].length;
+      tokens.push({word:match[0],line,start:match.index,end:match.index+match[0].length}); consumed=match.index+match[0].length;
     }
-    return tokens;
+    return tokens.map((token,index)=>({...token,before:tokens.slice(Math.max(0,index-2),index).map(item=>item.word),after:tokens.slice(index+1,index+3).map(item=>item.word)}));
   }
-  function addedWords(previous, next) {
+  function wordChanges(previous, next) {
     const oldTokens=wordTokens(previous), newTokens=wordTokens(next);
     let start=0;
     while(start<oldTokens.length && start<newTokens.length && oldTokens[start].word===newTokens[start].word) start++;
     let oldEnd=oldTokens.length,newEnd=newTokens.length;
     while(oldEnd>start && newEnd>start && oldTokens[oldEnd-1].word===newTokens[newEnd-1].word) { oldEnd--;newEnd--; }
     const a=oldTokens.slice(start,oldEnd),b=newTokens.slice(start,newEnd);
-    if(!b.length)return [];
+    if(!b.length)return {added:[],removed:a};
+    if(!a.length)return {added:b,removed:[]};
     const oldCounts=new Map();for(const token of a)oldCounts.set(token.word,(oldCounts.get(token.word)||0)+1);
-    const frequencyFallback=()=>{const left=new Map(oldCounts),result=[];for(const token of b){const count=left.get(token.word)||0;if(count)left.set(token.word,count-1);else result.push(token);}return result;};
+    const frequencyFallback=()=>{
+      const left=new Map(oldCounts),added=[];
+      for(const token of b){const count=left.get(token.word)||0;if(count)left.set(token.word,count-1);else added.push(token);}
+      const right=new Map();for(const token of b)right.set(token.word,(right.get(token.word)||0)+1);
+      const removed=[];for(const token of a){const count=right.get(token.word)||0;if(count)right.set(token.word,count-1);else removed.push(token);}
+      return {added,removed};
+    };
     const furthest=new Map([[1,0]]),trace=[],limit=Math.min(a.length+b.length,512);
     for(let distance=0;distance<=limit;distance++){
       trace.push(new Map(furthest));
@@ -210,15 +217,15 @@
         while(x<a.length&&y<b.length&&a[x].word===b[y].word){x++;y++;}
         furthest.set(diagonal,x);
         if(x<a.length||y<b.length)continue;
-        const result=[];
+        const added=[],removed=[];
         for(let step=distance;step>0;step--){
           const before=trace[step],k=x-y;
           const previousK=(k===-step || (k!==step&&(before.get(k-1)??-Infinity)<(before.get(k+1)??-Infinity)))?k+1:k-1;
           const previousX=before.get(previousK)??0,previousY=previousX-previousK;
           while(x>previousX&&y>previousY){x--;y--;}
-          if(x===previousX){y--;result.push(b[y]);}else x--;
+          if(x===previousX){y--;added.push(b[y]);}else{x--;removed.push(a[x]);}
         }
-        return result.reverse();
+        return {added:added.reverse(),removed:removed.reverse()};
       }
     }
     return frequencyFallback();
@@ -226,8 +233,29 @@
   function appendAddedWords(target, words) {
     for(const item of words){
       let group=target[target.length-1];
-      if(!group||group.line!==item.line){group={line:item.line,words:[]};target.push(group);}
+      if(!group||group.line!==item.line){group={line:item.line,words:[],anchors:[]};target.push(group);}
       group.words.push(item.word);
+      group.anchors.push({word:item.word,line:item.line,before:item.before,after:item.after});
+    }
+  }
+  function removeAddedWords(target, words) {
+    for(const deleted of words){
+      let candidate=null,bestScore=-1;
+      for(let groupIndex=0;groupIndex<target.length;groupIndex++){
+        const group=target[groupIndex];
+        for(let anchorIndex=0;anchorIndex<group.anchors.length;anchorIndex++){
+          const anchor=group.anchors[anchorIndex];if(anchor.word!==deleted.word)continue;
+          let score=0;
+          for(let i=1;i<=deleted.before.length;i++)if(anchor.before[anchor.before.length-i]===deleted.before[deleted.before.length-i])score+=3;
+          for(let i=0;i<deleted.after.length;i++)if(anchor.after[i]===deleted.after[i])score+=3;
+          if(anchor.line===deleted.line)score++;
+          if(score>bestScore){candidate={groupIndex,anchorIndex};bestScore=score;}
+        }
+      }
+      if(!candidate)continue;
+      const group=target[candidate.groupIndex];group.anchors.splice(candidate.anchorIndex,1);
+      group.words=group.anchors.map(anchor=>anchor.word);
+      if(!group.anchors.length)target.splice(candidate.groupIndex,1);
     }
   }
   function commitCurrent() {
@@ -235,16 +263,17 @@
     const entry = currentEntry();
     const text = $('editor').value;
     if (entry.text === text) { pendingSaveLine = null; return false; }
-    const at = isoNow(), additions = addedWords(entry.text,text);
+    const at = isoNow(), changes = wordChanges(entry.text,text);
     entry.text = text; entry.updatedAt = at; entry.savedAt = at;
     const line = pendingSaveLine || editorLine();
     const latest = entry.saveLog[entry.saveLog.length - 1];
     if (latest?.source === 'autosave' && localMinuteKey(latest.at) === localMinuteKey(at)) {
       latest.at = at; latest.line = line; latest.count = (latest.count || 1) + 1;
-      appendAddedWords(latest.additions,additions);
+      removeAddedWords(latest.additions,changes.removed);
+      appendAddedWords(latest.additions,changes.added);
     } else {
       const log={at,source:'autosave',line,count:1,changesKnown:true,additions:[]};
-      appendAddedWords(log.additions,additions);entry.saveLog.push(log);
+      appendAddedWords(log.additions,changes.added);entry.saveLog.push(log);
     }
     pendingSaveLine = null;
     updateSavedAt(entry); refreshAutosaveLog();
@@ -272,6 +301,7 @@
     $('savedAt').setAttribute('aria-label', 'Show autosave times for ' + longDate(fromKey(selectedKey)) + '. ' + $('savedAt').textContent);
   }
   function renderDate() {
+    clearAddedWordHighlight();
     const date = fromKey(selectedKey), entry = currentEntry(), locked = isLocked(selectedKey);
     const today = selectedKey === todayKey;
     const jalali = jalaliForKey(selectedKey);
@@ -324,7 +354,7 @@
     $('dialogBackdrop').hidden = false;
     return new Promise(resolve => { dialogResolve = resolve; });
   }
-  function finishDialog(value) { $('dialogBackdrop').hidden = true; clearTimeout(addedWordsTimer); addedWordsTimer = 0; autosaveLogKey = ''; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
+  function finishDialog(value) { $('dialogBackdrop').hidden = true; autosaveLogKey = ''; const resolve = dialogResolve; dialogResolve = null; if (resolve) resolve(value); }
   function closeMenu() {
     $('menuPopover').hidden = true;
     for (const button of document.querySelectorAll('[data-open-menu]')) button.setAttribute('aria-expanded', 'false');
@@ -373,47 +403,60 @@
   function refreshAutosaveLog() {
     if (autosaveLogKey && !$('dialogBackdrop').hidden) $('dialogBody').replaceChildren(autosaveLogBody(autosaveLogKey));
   }
-  function addedWordsBody(entry,minute) {
-    const body=textNode('div','','added-words-view');
-    body.append(textNode('p',new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(entry.key))+' · '+jalaliLabel(entry.key),'hint'));
-    if(!minute.changesKnown&&!minute.additions.length){
-      body.append(textNode('p','Word changes were not recorded for this save by the earlier app version.','hint'));
-      return {body,marks:[]};
+  function clearAddedWordHighlight() {
+    clearTimeout(addedWordsTimer); addedWordsTimer=0;
+    $('editorHighlight').hidden=true; $('editorHighlight').replaceChildren();
+    $('editor').classList.remove('showing-added-words');
+  }
+  function locateMinuteAdditions(text,minute) {
+    const tokens=wordTokens(text),used=new Set(),ranges=[];
+    for(const group of minute.additions){
+      const anchors=group.anchors?.length?group.anchors:group.words.map(word=>({word,line:group.line,before:[],after:[]}));
+      for(const anchor of anchors){
+        let best=null,bestScore=-1;
+        for(let index=0;index<tokens.length;index++){
+          const token=tokens[index],id=token.start+':'+token.end;
+          if(token.word!==anchor.word||used.has(id))continue;
+          let score=0;
+          for(let i=1;i<=anchor.before.length;i++)if(token.before[token.before.length-i]===anchor.before[anchor.before.length-i])score+=2;
+          for(let i=0;i<anchor.after.length;i++)if(token.after[i]===anchor.after[i])score+=2;
+          if(token.line===anchor.line)score++;
+          if(score>bestScore){best=token;bestScore=score;}
+        }
+        if(best){used.add(best.start+':'+best.end);ranges.push({start:best.start,end:best.end,line:best.line});}
+      }
     }
-    if(!minute.additions.length){
-      body.append(textNode('p','No new words were added during this minute.','hint'));
-      return {body,marks:[]};
-    }
-    body.append(textNode('p',(minute.count||1)+((minute.count||1)===1?' save':' saves')+' during this minute. New words are highlighted for five seconds.','hint'));
-    const combined=new Map();
-    for(const item of minute.additions){
-      let words=combined.get(item.line);
-      if(!words){words=[];combined.set(item.line,words);}
-      words.push(...item.words);
-    }
-    const list=textNode('div','','added-words-list'),marks=[];
-    for(const [lineNumber,groupWords] of [...combined.entries()].sort((a,b)=>a[0]-b[0])){
-      const row=textNode('div','','added-words-line');
-      row.append(textNode('span','Line '+lineNumber,'added-words-line-number'));
-      const words=textNode('p','','added-words-text');
-      groupWords.forEach((word,index)=>{if(index)words.append(document.createTextNode(' '));const mark=textNode('mark',word,'added-word-highlight highlighted');words.append(mark);marks.push(mark);});
-      row.append(words);list.append(row);
-    }
-    body.append(list);
-    if(!minute.changesKnown)body.append(textNode('p','Earlier app versions did not record word changes for this minute. Only words added after this update are shown.','hint'));
-    return {body,marks};
+    return ranges.sort((a,b)=>a.start-b.start);
   }
   function showMinuteAdditions(key,index) {
+    if(selectedKey===todayKey)flushSession();
     const entry=getEntry(key),minute=entry.saveLog[index];
+    finishDialog(null);
     if(!minute)return;
-    clearTimeout(addedWordsTimer);
-    const {body,marks}=addedWordsBody(entry,minute);
-    const at=new Date(minute.at),formattedTime=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',hour12:!settings.use24Hour}).format(at);
-    dialog('Words added · '+formattedTime,body,[{label:'Back',value:'back'},{label:'Close',value:null}]).then(value=>{if(value==='back')showAutosaveLog(key);});
-    if(marks.length)addedWordsTimer=setTimeout(()=>{for(const mark of marks)mark.classList.remove('highlighted');addedWordsTimer=0;},5000);
+    clearAddedWordHighlight();
+    if(key!==selectedKey){if(!$('calendarPage').hidden)closeCalendar();selectedKey=key;renderDate();persistNow();}
+    if(!minute.changesKnown&&!minute.additions.length){showToast('Word history is unavailable for this older save.');return;}
+    const text=$('editor').value,ranges=locateMinuteAdditions(text,minute);
+    if(!ranges.length){showToast('No words from this autosave minute are in the current entry.');return;}
+    const overlay=$('editorHighlight'),fragment=document.createDocumentFragment();
+    let cursor=0;
+    for(const range of ranges){
+      if(range.start<cursor||range.end>text.length)continue;
+      fragment.append(document.createTextNode(text.slice(cursor,range.start)));
+      const mark=textNode('mark',text.slice(range.start,range.end),'editor-added-word highlighted');
+      mark.dataset.line=String(range.line);
+      fragment.append(mark);cursor=range.end;
+    }
+    fragment.append(document.createTextNode(text.slice(cursor)));
+    overlay.replaceChildren(fragment);
+    overlay.style.direction=getComputedStyle($('editor')).direction;
+    overlay.hidden=false; $('editor').classList.add('showing-added-words');
+    overlay.scrollTop=$('editor').scrollTop;overlay.scrollLeft=$('editor').scrollLeft;
+    addedWordsTimer=setTimeout(clearAddedWordHighlight,5000);
   }
   function showAutosaveLog(key=selectedKey) {
     closeMenu();
+    clearAddedWordHighlight();
     autosaveLogKey = key;
     dialog('Autosave times', autosaveLogBody(key), [{label:'Close',value:null}]);
   }
@@ -558,8 +601,8 @@
     $('calendarBack').addEventListener('click', closeCalendar);
     $('savedAt').addEventListener('click', () => showAutosaveLog());
     $('savedAt').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showAutosaveLog(); } });
-    $('editor').addEventListener('input', () => { updateMeta(); updateLineNumbers(); scheduleAutosave(); });
-    $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; });
+    $('editor').addEventListener('input', () => { clearAddedWordHighlight(); updateMeta(); updateLineNumbers(); scheduleAutosave(); });
+    $('editor').addEventListener('scroll', () => { $('lineNumbers').scrollTop = $('editor').scrollTop; $('editorHighlight').scrollTop=$('editor').scrollTop; $('editorHighlight').scrollLeft=$('editor').scrollLeft; });
     $('dialogClose').addEventListener('click', () => finishDialog(null));
     $('dialogBackdrop').addEventListener('click', e => { if (e.target === $('dialogBackdrop')) finishDialog(null); });
     document.addEventListener('click', e => { if (!e.target.closest('#menuPopover') && !e.target.closest('[data-open-menu]')) closeMenu(); });

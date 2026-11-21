@@ -10,6 +10,7 @@
   let settings = {...defaults};
   let entries = {};
   let selectedKey = '';
+  let selectedSection = 'diary';
   let todayKey = '';
   let loading = true;
   let restored = false;
@@ -21,6 +22,7 @@
   let calendarCursor = new Date();
   let dialogResolve = null;
   let autosaveLogKey = '';
+  let autosaveLogSection = 'diary';
   let addedWordsTimer = 0;
   let requestCounter = 0;
   const pending = new Map();
@@ -30,7 +32,19 @@
   function fromKey(key) { const [y,m,d] = key.split('-').map(Number); return new Date(y, m - 1, d, 12, 0, 0, 0); }
   function addDays(key, amount) { const date = fromKey(key); date.setDate(date.getDate() + amount); return dateKey(date); }
   function sameDay(a,b) { return dateKey(a) === dateKey(b); }
+  function relativeDayLabel(key) {
+    const [year,month,day]=key.split('-').map(Number);
+    const [todayYear,todayMonth,todayDay]=todayKey.split('-').map(Number);
+    const offset=Math.round((Date.UTC(year,month-1,day)-Date.UTC(todayYear,todayMonth-1,todayDay))/86400000);
+    if(!offset)return 'Today';
+    const days=Math.abs(offset);
+    const amount=days+' '+(days===1?'day':'days');
+    return offset>0?amount+' from today':amount+' before today';
+  }
   function isLocked(key) { return key < todayKey; }
+  function sectionIsLocked(key=selectedKey, section=selectedSection) {
+    return section === 'diary' ? key !== todayKey : key < todayKey;
+  }
   function nowTime(date = new Date()) {
     return new Intl.DateTimeFormat(undefined, {hour:'2-digit', minute:'2-digit', hour12:!settings.use24Hour}).format(date);
   }
@@ -71,8 +85,8 @@
   function loadLocal() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) { return {}; } }
   function stateSnapshot() {
     const copy = {};
-    for (const [key, entry] of Object.entries(entries)) copy[key] = {...entry};
-    return {version:3, settings, selectedKey, entries:copy};
+    for (const [key, entry] of Object.entries(entries)) copy[key] = {...entry,notes:{...entry.notes}};
+    return {version:4, settings, selectedKey, selectedSection, entries:copy};
   }
   function persistNow() {
     clearTimeout(persistTimer);
@@ -86,8 +100,8 @@
     clearTimeout(typingTimer);
     if (selectedKey && $('editor')) {
       commitCurrent();
-      if (selectedKey === todayKey) {
-        const saved = !!currentEntry().savedAt;
+      if (!sectionIsLocked()) {
+        const saved = !!activeRecord().savedAt;
         $('saveState').className = saved ? 'save-state saved' : 'save-state';
         $('saveState').innerHTML = '<i class="status-dot"></i><span>' + (saved ? 'Saved' : 'Ready') + '</span>';
       }
@@ -96,8 +110,18 @@
   }
 
   function getEntry(key) {
-    if (!entries[key] || typeof entries[key] !== 'object') entries[key] = {key, text:'', savedAt:'', updatedAt:'', saveLog:[]};
+    if (!entries[key] || typeof entries[key] !== 'object') entries[key] = {key, text:'', savedAt:'', updatedAt:'', saveLog:[], notes:{text:'',savedAt:'',updatedAt:'',saveLog:[]}};
+    if (!entries[key].notes || typeof entries[key].notes !== 'object') entries[key].notes = {text:'',savedAt:'',updatedAt:'',saveLog:[]};
+    if (typeof entries[key].notes.text !== 'string') entries[key].notes.text = '';
+    if (!Array.isArray(entries[key].notes.saveLog)) entries[key].notes.saveLog = [];
+    entries[key].notes.savedAt = validTimestamp(entries[key].notes.savedAt) ? entries[key].notes.savedAt : '';
+    entries[key].notes.updatedAt = validTimestamp(entries[key].notes.updatedAt) ? entries[key].notes.updatedAt : entries[key].notes.savedAt;
+    entries[key].notes.saveLog = normalizeSaveLog(entries[key].notes.saveLog);
     return entries[key];
+  }
+  function activeRecord(key=selectedKey, section=selectedSection) {
+    const entry=getEntry(key);
+    return section === 'notes' ? entry.notes : entry;
   }
   function validTimestamp(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)); }
   function localSaveBlockKey(value) {
@@ -139,15 +163,21 @@
         const savedAt = validTimestamp(value.savedAt) ? value.savedAt : validTimestamp(value.updatedAt) ? value.updatedAt : '';
         const saveLog = Array.isArray(value.saveLog) ? normalizeSaveLog(value.saveLog) : [];
         if (!saveLog.length && savedAt) saveLog.push({at:savedAt, source:'legacy', line:null, count:1});
+        const noteValue=value.notes && typeof value.notes === 'object' ? value.notes : {};
+        const noteSavedAt=validTimestamp(noteValue.savedAt)?noteValue.savedAt:'';
+        let noteSaveLog=Array.isArray(noteValue.saveLog)?normalizeSaveLog(noteValue.saveLog):[];
+        if(!noteSaveLog.length&&noteSavedAt)noteSaveLog.push({at:noteSavedAt,source:'legacy',line:null,count:1});
         result[key] = {key, text:typeof value.text === 'string' ? value.text : '', savedAt,
-          updatedAt:validTimestamp(value.updatedAt) ? value.updatedAt : savedAt, saveLog};
+          updatedAt:validTimestamp(value.updatedAt) ? value.updatedAt : savedAt, saveLog,
+          notes:{text:typeof noteValue.text==='string'?noteValue.text:'',savedAt:noteSavedAt,
+            updatedAt:validTimestamp(noteValue.updatedAt)?noteValue.updatedAt:noteSavedAt,saveLog:noteSaveLog}};
       }
     }
     // A workspace saved by the reference editor can still be opened as a diary.
     if (!Object.keys(result).length && Array.isArray(state && state.documents)) {
       for (const doc of state.documents) {
         const match = String(doc.name || '').match(/(\d{4}-\d{2}-\d{2})/);
-        if (match) result[match[1]] = {key:match[1], text:doc.text || '', savedAt:'', updatedAt:'', saveLog:[]};
+        if (match) result[match[1]] = {key:match[1], text:doc.text || '', savedAt:'', updatedAt:'', saveLog:[],notes:{text:'',savedAt:'',updatedAt:'',saveLog:[]}};
       }
     }
     return result;
@@ -161,6 +191,7 @@
     // The current entry is created on first launch; older entries are permanently read-only.
     getEntry(todayKey);
     selectedKey = state && state.selectedKey === todayKey ? state.selectedKey : todayKey;
+    selectedSection = selectedKey === todayKey && state?.selectedSection === 'notes' ? 'notes' : 'diary';
     for (const key of Object.keys(entries)) if (isLocked(key)) entries[key].locked = true;
     restored = true; loading = false;
     applyTheme(); renderDate(); renderClock(); schedulePersist();
@@ -267,8 +298,8 @@
     }
   }
   function commitCurrent() {
-    if (!restored || selectedKey !== todayKey || !$('editor')) { pendingSaveLine = null; return false; }
-    const entry = currentEntry();
+    if (!restored || sectionIsLocked() || !$('editor')) { pendingSaveLine = null; return false; }
+    const entry = activeRecord();
     const text = $('editor').value;
     if (entry.text === text) { pendingSaveLine = null; return false; }
     const at = isoNow(), changes = wordChanges(entry.text,text);
@@ -288,7 +319,7 @@
     return true;
   }
   function scheduleAutosave() {
-    if (isLocked(selectedKey)) return;
+    if (sectionIsLocked()) return;
     pendingSaveLine = editorLine();
     clearTimeout(typingTimer);
     const state = $('saveState'); state.className = 'save-state saving'; state.innerHTML = '<i class="status-dot"></i><span>Typing…</span>';
@@ -306,25 +337,36 @@
   }
   function updateSavedAt(entry) {
     $('savedAt').textContent = entry.savedAt ? 'Saved at ' + nowTime(new Date(entry.savedAt)) : 'Not saved yet';
-    $('savedAt').setAttribute('aria-label', 'Show autosave times for ' + longDate(fromKey(selectedKey)) + '. ' + $('savedAt').textContent);
+    const label=selectedSection === 'notes' ? 'notes' : 'diary';
+    $('savedAt').title='Show autosave times for these '+label;
+    $('savedAt').setAttribute('aria-label', 'Show autosave times for ' + label + ' on ' + longDate(fromKey(selectedKey)) + '. ' + $('savedAt').textContent);
   }
   function renderDate() {
     clearAddedWordHighlight();
-    const date = fromKey(selectedKey), entry = currentEntry(), locked = isLocked(selectedKey);
+    const date = fromKey(selectedKey), entry = activeRecord(), locked = sectionIsLocked();
     const today = selectedKey === todayKey;
     const jalali = jalaliForKey(selectedKey);
-    $('dateKicker').textContent = today ? 'TODAY' : locked ? 'PAST ENTRY' : 'DIARY ENTRY';
+    $('dateKicker').textContent = relativeDayLabel(selectedKey).toUpperCase();
     $('dateTitle').textContent = longDate(date);
     $('dateSubtitle').textContent = jalali.day + ' ' + jalali.monthName + ' ' + jalali.year + ' · ' + nowTime();
     $('topDate').textContent = shortDate(new Date()) + ' · ' + nowTime();
-    $('entryLabel').textContent = today ? "TODAY'S ENTRY" : locked ? 'READ-ONLY ENTRY' : 'DIARY ENTRY';
-    $('dateStateText').textContent = locked ? 'Read only' : 'Editable';
+    $('entryLabel').textContent = selectedSection === 'notes'
+      ? (today ? "TODAY'S NOTES" : selectedKey > todayKey ? 'FUTURE NOTES' : 'PAST NOTES')
+      : (today ? "TODAY'S DIARY" : selectedKey > todayKey ? 'FUTURE DIARY' : 'PAST DIARY');
+    $('diaryTab').classList.toggle('active', selectedSection === 'diary');
+    $('notesTab').classList.toggle('active', selectedSection === 'notes');
+    $('diaryTab').setAttribute('aria-selected', String(selectedSection === 'diary'));
+    $('notesTab').setAttribute('aria-selected', String(selectedSection === 'notes'));
+    $('diaryTab').setAttribute('aria-label', 'Diary' + (selectedKey !== todayKey ? ', read only' : ', editable'));
+    $('notesTab').setAttribute('aria-label', 'Notes' + (selectedKey < todayKey ? ', read only' : ', editable'));
+    $('dateStateText').textContent = locked ? (selectedSection === 'notes' ? 'Notes locked' : 'Diary locked') : 'Editable';
     $('lockIcon').textContent = locked ? '▣' : '●';
     $('date-state');
     $('dateStateText').parentElement.classList.toggle('locked', locked);
     $('editor').readOnly = locked;
     $('editor').value = entry.text || '';
-    $('editor').placeholder = locked ? 'This entry is locked after the day ended.' : 'Write about your day…';
+    $('editor').setAttribute('aria-label', selectedSection === 'notes' ? 'Notes' : 'Diary entry');
+    $('editor').placeholder = locked ? (selectedSection === 'notes' ? 'Past notes are read only.' : 'Diary entries are editable only today.') : selectedSection === 'notes' ? 'Write notes for this date…' : 'Write about your day…';
     $('previousDay').disabled = false;
     updateNavigation();
     const state = $('saveState'); state.className = locked ? 'save-state locked' : entry.savedAt ? 'save-state saved' : 'save-state';
@@ -341,6 +383,7 @@
       clearTimeout(typingTimer); commitCurrent();
       todayKey = key;
       selectedKey = todayKey;
+      selectedSection = 'diary';
       for (const date of Object.keys(entries)) if (isLocked(date)) entries[date].locked = true;
       getEntry(todayKey); renderDate(); schedulePersist();
     } else if (selectedKey === todayKey) {
@@ -348,11 +391,19 @@
       $('dateSubtitle').textContent = j.day + ' ' + j.monthName + ' ' + j.year + ' · ' + nowTime(now);
     }
   }
-  function selectDate(key) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || key > todayKey) return;
+  function selectDate(key, section=selectedSection) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return;
     clearTimeout(typingTimer);
     commitCurrent();
-    selectedKey = key; getEntry(key); renderDate(); closeMenu(); persistNow();
+    selectedKey = key; selectedSection=section; getEntry(key); renderDate(); closeMenu(); persistNow();
+  }
+  function selectSection(section) {
+    if ((section !== 'diary' && section !== 'notes') || section === selectedSection) return;
+    clearTimeout(typingTimer);
+    commitCurrent();
+    selectedSection=section;
+    renderDate();
+    persistNow();
   }
 
   function textNode(tag, text, cls) { const node = document.createElement(tag); node.textContent = text; if (cls) node.className = cls; return node; }
@@ -370,10 +421,11 @@
 
   function autosaveLogBody(key) {
     const body = textNode('div', '', 'autosave-log');
+    body.append(textNode('p',autosaveLogSection === 'notes' ? 'Notes · ' + longDate(fromKey(key)) : 'Diary · ' + longDate(fromKey(key)),'autosave-log-section'));
     const date = textNode('p', '', 'autosave-log-date');
     date.append(textNode('strong', new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(key))), textNode('span', jalaliLabel(key)));
     body.append(date);
-    const log = getEntry(key).saveLog;
+    const log = activeRecord(key,autosaveLogSection).saveLog;
     if (!log.length) {
       body.append(textNode('p', 'No autosave times have been recorded for this day yet.', 'hint'));
       return body;
@@ -395,7 +447,7 @@
       timeButton.setAttribute('aria-label','Show words added during '+formattedTime);
       timeButton.title=item.source === 'legacy' ? 'Show words added at this save' : 'Show words added during this five-minute block';
       timeButton.append(time);
-      timeButton.addEventListener('click',()=>showMinuteAdditions(key,index));
+      timeButton.addEventListener('click',()=>showMinuteAdditions(key,index,autosaveLogSection));
       const details = textNode('span', '', 'autosave-log-details');
       const description = item.source === 'legacy' ? 'Last known save' : (item.count || 1) + ((item.count || 1) === 1 ? ' autosave in this block' : ' autosaves in this block');
       details.append(textNode('strong', item.line ? 'Line ' + item.line : 'Line not recorded', 'autosave-log-line'), textNode('small', description, 'hint'));
@@ -436,13 +488,13 @@
     }
     return ranges.sort((a,b)=>a.start-b.start);
   }
-  function showMinuteAdditions(key,index) {
-    if(selectedKey===todayKey)flushSession();
-    const entry=getEntry(key),minute=entry.saveLog[index];
+  function showMinuteAdditions(key,index,section=autosaveLogSection) {
+    if(key===selectedKey&&section===selectedSection)flushSession();
+    const entry=activeRecord(key,section),minute=entry.saveLog[index];
     finishDialog(null);
     if(!minute)return;
     clearAddedWordHighlight();
-    if(key!==selectedKey){if(!$('calendarPage').hidden)closeCalendar();selectedKey=key;renderDate();persistNow();}
+    if(key!==selectedKey||section!==selectedSection){if(!$('calendarPage').hidden)closeCalendar();selectedKey=key;selectedSection=section;renderDate();persistNow();}
     if(!minute.changesKnown&&!minute.additions.length){showToast('Word history is unavailable for this older save.');return;}
     const text=$('editor').value,ranges=locateMinuteAdditions(text,minute);
     if(!ranges.length){showToast('No words from this autosave block are in the current entry.');return;}
@@ -466,7 +518,8 @@
     closeMenu();
     clearAddedWordHighlight();
     autosaveLogKey = key;
-    dialog('Autosave times', autosaveLogBody(key), [{label:'Close',value:null}]);
+    autosaveLogSection = selectedSection;
+    dialog(autosaveLogSection === 'notes' ? 'Notes autosave times' : 'Autosave times', autosaveLogBody(key), [{label:'Close',value:null}]);
   }
 
   function closeCalendar() {
@@ -511,17 +564,16 @@
         cell.append(textNode('span',String(day),'calendar-gregorian'), textNode('span',String(jalali.day),'calendar-jalali'));
         if (key === focusedKey) cell.classList.add('selected'); if (key === todayKey) cell.classList.add('today'); if (isLocked(key)) cell.classList.add('locked');
         if (key > todayKey) cell.classList.add('future');
-        if (entries[key] && entries[key].text) cell.append(textNode('i','','entry-dot'));
+        if (entries[key] && (entries[key].text || entries[key].notes?.text)) cell.append(textNode('i','','entry-dot'));
         cell.addEventListener('click', () => {
-          if (key > todayKey) { focusedKey = key; draw(); return; }
-          selectDate(key); closeCalendar();
+          selectDate(key,'notes'); closeCalendar();
         }); grid.append(cell);
       }
       const future = focusedKey > todayKey;
       preview.replaceChildren(
         textNode('strong', new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(fromKey(focusedKey))),
         textNode('span', jalaliLabel(focusedKey)),
-        textNode('small', future ? 'Future date · writing opens on this day' : focusedKey === todayKey ? 'Today · open your diary entry' : 'Past entry · read only')
+        textNode('small', future ? relativeDayLabel(focusedKey) + ' · Notes are editable, Diary is read only' : focusedKey === todayKey ? 'Today · choose Diary or Notes' : relativeDayLabel(focusedKey) + ' · Diary and Notes are read only')
       );
     };
     const changeMonth = amount => { calendarCursor.setMonth(calendarCursor.getMonth() + amount); focusedKey = dateKey(calendarCursor); draw(); };
@@ -537,13 +589,15 @@
   }
   function showEntries() {
     closeMenu(); const body = document.createElement('div'); body.className = 'entry-list';
-    const keys = Object.keys(entries).filter(key => entries[key].text || key === todayKey).sort().reverse();
-    if (!keys.length) body.append(textNode('p','Your diary entries will appear here after you write and pause.','hint'));
+    const keys = Object.keys(entries).filter(key => entries[key].text || entries[key].notes?.text || key === todayKey).sort().reverse();
+    if (!keys.length) body.append(textNode('p','Your dated diary entries and notes will appear here after you write and pause.','hint'));
     for (const key of keys) {
       const entry = entries[key], row = document.createElement('button'); row.className = 'entry-row';
       const main = textNode('span','','entry-row-main'); main.append(textNode('strong',longDate(fromKey(key))));
-      main.append(textNode('small',jalaliLabel(key) + (entry.savedAt ? ' · saved ' + nowTime(new Date(entry.savedAt)) : '')));
-      row.append(main,textNode('span',isLocked(key) ? '▣' : '›','row-lock')); row.addEventListener('click', () => { selectDate(key); if (!$('calendarPage').hidden) closeCalendar(); finishDialog(true); }); body.append(row);
+      const savedAt=entry.savedAt || entry.notes?.savedAt;
+      main.append(textNode('small',jalaliLabel(key) + (savedAt ? ' · saved ' + nowTime(new Date(savedAt)) : '') + (entry.notes?.text ? ' · Notes' : '')));
+      const defaultSection=entry.text?'diary':entry.notes?.text?'notes':'diary';
+      row.append(main,textNode('span',isLocked(key) ? '▣' : '›','row-lock')); row.addEventListener('click', () => { selectDate(key,defaultSection); if (!$('calendarPage').hidden) closeCalendar(); finishDialog(true); }); body.append(row);
     }
     dialog('Entries',body,[{label:'Close',value:null}]);
   }
@@ -561,16 +615,21 @@
       settings.use24Hour = choices.find(input => input.checked).value === '24';
       renderClock();
       $('dateSubtitle').textContent = jalaliLabel(selectedKey) + ' · ' + nowTime();
-      updateSavedAt(currentEntry()); updateMenuPreferences(); schedulePersist();
+      updateSavedAt(activeRecord()); updateMenuPreferences(); schedulePersist();
     });
   }
   function showAbout() {
     closeMenu(); const body = document.createElement('div'); body.append(textNode('p','Diary keeps your writing on this device and works without an account or network connection.'),textNode('p','Dates use your device clock and show both the Gregorian calendar and the Iranian Solar Hijri month.'),textNode('p','When you stop typing, Diary records the current time and saves the entry automatically.')); dialog('About Diary',body);
   }
   function exportDiary() {
-    closeMenu(); const keys = Object.keys(entries).filter(key => entries[key].text).sort();
-    if (!keys.length) { showToast('Write an entry before exporting.'); return; }
-    const text = keys.map(key => '===== ' + longDate(fromKey(key)) + ' · ' + jalaliLabel(key) + ' =====\n' + entries[key].text.trim() + '\n').join('\n');
+    closeMenu(); const keys = Object.keys(entries).filter(key => entries[key].text || entries[key].notes?.text).sort();
+    if (!keys.length) { showToast('Write a diary entry or notes before exporting.'); return; }
+    const text = keys.map(key => {
+      const parts=['===== ' + longDate(fromKey(key)) + ' · ' + jalaliLabel(key) + ' ====='];
+      if(entries[key].text)parts.push('DIARY\n'+entries[key].text.trim());
+      if(entries[key].notes?.text)parts.push('NOTES\n'+entries[key].notes.text.trim());
+      return parts.join('\n\n');
+    }).join('\n\n')+'\n';
     const requestId = 'export' + (++requestCounter); pending.set(requestId, true);
     native('save', {id:'diary-export',name:'diary-' + todayKey + '.txt',uri:'',text,encoding:'UTF-8',eol:'LF',saveAs:true,force:true}, requestId);
   }
@@ -578,7 +637,7 @@
     switch (action) {
       case 'previous': selectDate(addDays(selectedKey,-1)); if (!$('calendarPage').hidden) closeCalendar(); break;
       case 'next': selectDate(addDays(selectedKey,1)); if (!$('calendarPage').hidden) closeCalendar(); break;
-      case 'today': selectDate(todayKey); if (!$('calendarPage').hidden) closeCalendar(); break;
+      case 'today': selectDate(todayKey,'diary'); if (!$('calendarPage').hidden) closeCalendar(); break;
       case 'calendar': if ($('calendarPage').hidden) showCalendar(); else closeMenu(); break;
       case 'entries': showEntries(); break;
       case 'darkMode': closeMenu(); settings.dark = !settings.dark; applyTheme(); schedulePersist(); break;
@@ -606,6 +665,8 @@
     $('menuPopover').addEventListener('click', e => { const button = e.target.closest('[data-action]'); if (button) handleAction(button.dataset.action); });
     for (const button of document.querySelectorAll('.bottom-nav [data-action]')) button.addEventListener('click', () => handleAction(button.dataset.action));
     $('previousDay').addEventListener('click', () => handleAction('previous'));
+    $('diaryTab').addEventListener('click', () => selectSection('diary'));
+    $('notesTab').addEventListener('click', () => selectSection('notes'));
     $('calendarBack').addEventListener('click', closeCalendar);
     $('savedAt').addEventListener('click', () => showAutosaveLog());
     $('savedAt').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showAutosaveLog(); } });

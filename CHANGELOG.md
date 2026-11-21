@@ -1,3 +1,12 @@
+# ADiaryT 1.11
+
+- Add separate Diary and Notes tabs to every date, with independent text, autosave times, and five-minute word history.
+- Keep Diary editable today only; Notes stay editable today and on future dates. Past Notes and all non-today Diary entries are read only.
+- Selecting a calendar date opens its Notes tab, including future dates. Future diary entries stay locked, and past diary entries stay read only.
+- Label selected and calendar-preview dates by their distance from today, in days.
+- Preserve existing diary data while adding Notes; include both labeled sections in local text exports.
+- Android version 1.11 (version code 21), packaged as `ADiaryT-v1.11.apk`.
+
 # ADiaryT 1.10
 
 - Combine autosave history and added words into five-minute blocks, such as 18:30–18:34 and 18:35–18:39, instead of one entry per minute.

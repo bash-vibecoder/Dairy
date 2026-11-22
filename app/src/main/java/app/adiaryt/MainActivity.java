@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Base64;
 import android.util.AtomicFile;
 import android.view.View;
 import android.webkit.JavascriptInterface;
@@ -21,19 +22,27 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import org.json.JSONObject;
 
 /** Offline diary host: WebView UI plus an atomic private recovery snapshot. */
 public final class MainActivity extends Activity {
     private static final int SAVE = 401;
+    private static final int OPEN = 402;
     private static final int MAX_STATE_BYTES = 32 * 1024 * 1024;
+    private static final int MAX_BACKUP_BYTES = 64 * 1024 * 1024;
+    private static final int TRANSFER_CHUNK_BYTES = 96 * 1024;
     private WebView web;
     private AtomicFile stateFile;
     private boolean ready;
     private boolean pickerBusy;
     private byte[] pendingExport;
     private String pendingExportRequest = "";
+    private String transferRequest = "";
+    private String transferName;
+    private ByteArrayOutputStream pendingExportStream;
+    private String pendingImportRequest = "";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -79,18 +88,23 @@ public final class MainActivity extends Activity {
     private WebResourceResponse blocked() { return new WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", Collections.emptyMap(), new ByteArrayInputStream(new byte[0])); }
 
     private final class DiaryBridge {
-        @JavascriptInterface public void dispatch(String raw) {
+        @JavascriptInterface public boolean dispatch(String raw) {
+            String request = "";
             try {
-                if (raw == null || raw.length() > MAX_STATE_BYTES + 1024) throw new IOException("Diary data is too large to save.");
+                if (raw == null || raw.length() > MAX_BACKUP_BYTES + 1024) throw new IOException("Diary data is too large to save.");
                 JSONObject command = new JSONObject(raw);
-                String type = command.optString("type"), request = command.optString("requestId");
+                String type = command.optString("type"); request = command.optString("requestId");
                 JSONObject payload = command.optJSONObject("payload");
                 if (payload == null) payload = new JSONObject();
                 if ("ready".equals(type)) runOnUiThread(MainActivity.this::bootstrap);
                 else if ("persist".equals(type)) persist(payload);
                 else if ("theme".equals(type)) { final JSONObject p = payload; runOnUiThread(() -> applyTheme(p.optBoolean("dark"))); }
-                else if ("save".equals(type)) prepareExport(payload, request);
-            } catch (Exception error) { emit("error", object("message", message(error)), ""); }
+                else if ("saveStart".equals(type)) beginExport(payload, request);
+                else if ("saveChunk".equals(type)) appendExportChunk(payload, request);
+                else if ("saveComplete".equals(type)) prepareExport(request);
+                else if ("open".equals(type)) prepareImport(request);
+                return true;
+            } catch (Exception error) { emit("error", object("message", message(error)), request); return false; }
         }
     }
 
@@ -114,30 +128,85 @@ public final class MainActivity extends Activity {
         catch (IOException e) { if (output != null) stateFile.failWrite(output); throw e; }
     }
 
-    private void prepareExport(JSONObject payload, String request) throws Exception {
-        pendingExport = payload.getString("text").getBytes(StandardCharsets.UTF_8);
-        pendingExportRequest = request;
+    private synchronized void beginExport(JSONObject payload, String request) {
+        pendingExportStream = new ByteArrayOutputStream();
+        transferName = payload.optString("name", "adiary-backup.adiary");
+        transferRequest = request;
+    }
+
+    private synchronized void appendExportChunk(JSONObject payload, String request) throws Exception {
+        if (pendingExportStream == null || !request.equals(transferRequest)) throw new IOException("The encrypted backup transfer expired.");
+        byte[] block = Base64.decode(payload.getString("data"), Base64.NO_WRAP);
+        if (pendingExportStream.size() + block.length > MAX_BACKUP_BYTES) {
+            pendingExportStream = null;
+            throw new IOException("Encrypted backups are limited to 64 MB.");
+        }
+        pendingExportStream.write(block);
+    }
+
+    private void prepareExport(String request) throws Exception {
+        final byte[] bytes;
+        final String name;
+        synchronized (this) {
+            if (pendingExportStream == null || !request.equals(transferRequest)) throw new IOException("The encrypted backup transfer expired.");
+            bytes = pendingExportStream.toByteArray();
+            pendingExportStream = null;
+            name = transferName;
+        }
         runOnUiThread(() -> {
-            if (pickerBusy) { emit("error", object("message", "Finish the current export first."), request); return; }
-            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE);
-            intent.putExtra(Intent.EXTRA_TITLE, payload.optString("name", "diary.txt")); intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+            if (pickerBusy) { emit("error", object("message", "Finish the current file operation first."), request); return; }
+            pendingExport = bytes;
+            pendingExportRequest = request;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream").addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_TITLE, name); intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
             try { pickerBusy = true; startActivityForResult(intent, SAVE); }
-            catch (Exception error) { pickerBusy = false; emit("error", object("message", message(error)), request); }
+            catch (Exception error) { pickerBusy = false; clearExport(); emit("error", object("message", message(error)), request); }
+        });
+    }
+
+    private void prepareImport(String request) {
+        runOnUiThread(() -> {
+            if (pickerBusy) { emit("error", object("message", "Finish the current file operation first."), request); return; }
+            pendingImportRequest = request;
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try { pickerBusy = true; startActivityForResult(intent, OPEN); }
+            catch (Exception error) { pickerBusy = false; pendingImportRequest = ""; emit("error", object("message", message(error)), request); }
         });
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data); pickerBusy = false;
-        if (request != SAVE) return;
-        if (result != RESULT_OK || data == null || data.getData() == null) { emit("cancelled", new JSONObject(), pendingExportRequest); clearExport(); return; }
-        Uri uri = data.getData(); final byte[] bytes = pendingExport; final String id = pendingExportRequest; clearExport();
-        new Thread(() -> {
-            try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
-                if (out == null) throw new IOException("The selected location cannot be written.");
-                out.write(bytes); out.flush(); emit("saved", object("name", "diary export"), id);
-            } catch (Exception error) { emit("error", object("message", message(error)), id); }
-        }).start();
+        if (request == SAVE) {
+            if (result != RESULT_OK || data == null || data.getData() == null) { emit("cancelled", new JSONObject(), pendingExportRequest); clearExport(); return; }
+            if (pendingExport == null) return;
+            Uri uri = data.getData(); final byte[] bytes = pendingExport; final String id = pendingExportRequest; clearExport();
+            new Thread(() -> {
+                try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (out == null) throw new IOException("The selected location cannot be written.");
+                    out.write(bytes); out.flush(); emit("saved", object("name", "encrypted diary backup"), id);
+                } catch (Exception error) { emit("error", object("message", message(error)), id); }
+            }).start();
+        } else if (request == OPEN) {
+            final String id = pendingImportRequest; pendingImportRequest = "";
+            if (result != RESULT_OK || data == null || data.getData() == null) { emit("cancelled", new JSONObject(), id); return; }
+            Uri uri = data.getData();
+            new Thread(() -> {
+                try (InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new IOException("The selected file cannot be read.");
+                    byte[] bytes = readLimited(in, MAX_BACKUP_BYTES);
+                    emit("importStart", object("bytes", bytes.length), id);
+                    for (int offset = 0; offset < bytes.length; offset += TRANSFER_CHUNK_BYTES) {
+                        int length = Math.min(TRANSFER_CHUNK_BYTES, bytes.length - offset);
+                        byte[] chunk = Arrays.copyOfRange(bytes, offset, offset + length);
+                        emit("importChunk", object("data", Base64.encodeToString(chunk, Base64.NO_WRAP)), id);
+                    }
+                    emit("importComplete", new JSONObject(), id);
+                } catch (Exception error) { emit("error", object("message", message(error)), id); }
+            }).start();
+        }
     }
     private void clearExport() { pendingExport = null; pendingExportRequest = ""; }
     private static byte[] readLimited(InputStream input, int max) throws IOException {

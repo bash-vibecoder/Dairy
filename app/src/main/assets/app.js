@@ -23,6 +23,7 @@
   let dialogResolve = null;
   let autosaveLogKey = '';
   let autosaveLogSection = 'diary';
+  let importTransfer = null;
   let addedWordsTimer = 0;
   let requestCounter = 0;
   const pending = new Map();
@@ -74,7 +75,7 @@
   function jalaliLabel(key) { const j = jalaliForKey(key); return j.day + ' ' + j.monthName + ' ' + j.year; }
 
   function native(type, payload = {}, requestId = '') {
-    if (window.ADiaryTNative) window.ADiaryTNative.dispatch(JSON.stringify({type, payload, requestId}));
+    if (window.ADiaryTNative) return window.ADiaryTNative.dispatch(JSON.stringify({type, payload, requestId}));
     else if (type === 'ready') setTimeout(() => bootstrap(loadLocal()), 0);
   }
   function showToast(text, duration = 3000) {
@@ -409,7 +410,7 @@
   function textNode(tag, text, cls) { const node = document.createElement(tag); node.textContent = text; if (cls) node.className = cls; return node; }
   function dialog(title, body, buttons = [{label:'OK', value:'ok', className:'primary'}]) {
     $('dialogTitle').textContent = title; $('dialogBody').replaceChildren(body); const actions = $('dialogActions'); actions.replaceChildren();
-    for (const button of buttons) { const el = textNode('button', button.label); if (button.className) el.className = button.className; el.addEventListener('click', () => finishDialog(typeof button.value === 'function' ? button.value() : button.value)); actions.append(el); }
+    for (const button of buttons) { const el = textNode('button', button.label); if (button.className) el.className = button.className; el.addEventListener('click', () => { const result=typeof button.value === 'function' ? button.value() : button.value; if(result===false&&button.keepOpen)return; finishDialog(result); }); actions.append(el); }
     $('dialogBackdrop').hidden = false;
     return new Promise(resolve => { dialogResolve = resolve; });
   }
@@ -621,17 +622,119 @@
   function showAbout() {
     closeMenu(); const body = document.createElement('div'); body.append(textNode('p','Diary keeps your writing on this device and works without an account or network connection.'),textNode('p','Dates use your device clock and show both the Gregorian calendar and the Iranian Solar Hijri month.'),textNode('p','When you stop typing, Diary records the current time and saves the entry automatically.')); dialog('About Diary',body);
   }
-  function exportDiary() {
-    closeMenu(); const keys = Object.keys(entries).filter(key => entries[key].text || entries[key].notes?.text).sort();
-    if (!keys.length) { showToast('Write a diary entry or notes before exporting.'); return; }
-    const text = keys.map(key => {
-      const parts=['===== ' + longDate(fromKey(key)) + ' · ' + jalaliLabel(key) + ' ====='];
-      if(entries[key].text)parts.push('DIARY\n'+entries[key].text.trim());
-      if(entries[key].notes?.text)parts.push('NOTES\n'+entries[key].notes.text.trim());
-      return parts.join('\n\n');
-    }).join('\n\n')+'\n';
-    const requestId = 'export' + (++requestCounter); pending.set(requestId, true);
-    native('save', {id:'diary-export',name:'diary-' + todayKey + '.txt',uri:'',text,encoding:'UTF-8',eol:'LF',saveAs:true,force:true}, requestId);
+  const BACKUP_ITERATIONS = 310000;
+  const BACKUP_CHUNK_BYTES = 72 * 1024;
+  function bytesToBase64(bytes) {
+    let binary='';
+    for(let offset=0;offset<bytes.length;offset+=0x8000)binary+=String.fromCharCode(...bytes.subarray(offset,Math.min(offset+0x8000,bytes.length)));
+    return btoa(binary);
+  }
+  function base64ToBytes(value) {
+    const binary=atob(value),bytes=new Uint8Array(binary.length);
+    for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+    return bytes;
+  }
+  async function backupKey(password,salt,iterations) {
+    const material=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveKey']);
+    return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  }
+  async function encryptedBackup(password) {
+    flushSession();
+    const snapshot=stateSnapshot();
+    const plaintext=new TextEncoder().encode(JSON.stringify({format:'ADiaryT.Backup',version:1,exportedAt:isoNow(),entries:snapshot.entries}));
+    const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+    const key=await backupKey(password,salt,BACKUP_ITERATIONS);
+    const aad=new TextEncoder().encode('ADiaryT.EncryptedBackup/v1');
+    const ciphertext=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:aad,tagLength:128},key,plaintext));
+    const archive={format:'ADiaryT.EncryptedBackup',version:1,kdf:'PBKDF2-SHA-256',iterations:BACKUP_ITERATIONS,cipher:'AES-256-GCM',salt:bytesToBase64(salt),iv:bytesToBase64(iv),ciphertext:bytesToBase64(ciphertext)};
+    return JSON.stringify(archive);
+  }
+  function sendEncryptedBackup(archive) {
+    const requestId='export'+(++requestCounter);pending.set(requestId,'Export');
+    native('saveStart',{name:'ADiaryT-'+todayKey+'.adiary'},requestId);
+    const bytes=new TextEncoder().encode(archive);
+    for(let offset=0;offset<bytes.length;offset+=BACKUP_CHUNK_BYTES)
+      native('saveChunk',{data:bytesToBase64(bytes.subarray(offset,Math.min(offset+BACKUP_CHUNK_BYTES,bytes.length)))},requestId);
+    native('saveComplete',{},requestId);
+  }
+  function showExportBackup() {
+    closeMenu();
+    const body=document.createElement('div');
+    body.append(textNode('p','This encrypted backup includes all dates, Diary entries, Notes, and autosave history. Keep the password safe; it cannot be recovered.','hint'));
+    for(const [id,label] of [['backupPassword','Password'],['backupPasswordAgain','Confirm password']]){
+      const row=textNode('label',label,'backup-password-row');
+      const input=document.createElement('input');input.id=id;input.type='password';input.autocomplete='new-password';input.required=true;
+      input.setAttribute('aria-label',label);row.append(input);body.append(row);
+    }
+    const error=textNode('p','','backup-password-error');error.hidden=true;body.append(error);
+    dialog('Export encrypted diary',body,[{label:'Cancel',value:null},{label:'Create backup',className:'primary',keepOpen:true,value:()=>{
+      const password=$('backupPassword').value,confirmation=$('backupPasswordAgain').value;
+      if(password.length<8){error.textContent='Use a password with at least 8 characters.';error.hidden=false;return false;}
+      if(password!==confirmation){error.textContent='The passwords do not match.';error.hidden=false;return false;}
+      return password;
+    }}]).then(async password=>{
+      if(typeof password!=='string')return;
+      $('backupPassword').value='';$('backupPasswordAgain').value='';
+      try{sendEncryptedBackup(await encryptedBackup(password));}
+      catch(_){showToast('Could not encrypt the diary backup.',5000);}
+    });
+  }
+  function requestImportBackup() {
+    closeMenu();
+    const requestId='import'+(++requestCounter);pending.set(requestId,'Import');
+    native('open',{},requestId);
+  }
+  function validateBackup(plainText) {
+    const backup=JSON.parse(plainText);
+    if(!backup||backup.format!=='ADiaryT.Backup'||backup.version!==1||!backup.entries||typeof backup.entries!=='object'||Array.isArray(backup.entries))
+      throw new Error('This is not a supported ADiaryT backup.');
+    const rawEntries=Object.entries(backup.entries);
+    if(!rawEntries.length)throw new Error('This backup has no diary dates.');
+    if(rawEntries.some(([key,value])=>!/^\d{4}-\d{2}-\d{2}$/.test(key)||!value||typeof value!=='object'||dateKey(fromKey(key))!==key))
+      throw new Error('The backup contains an invalid diary date.');
+    const imported=migrateDocuments({entries:backup.entries});
+    if(Object.keys(imported).length!==rawEntries.length)throw new Error('The backup contains invalid diary data.');
+    return imported;
+  }
+  function confirmImportedEntries(imported) {
+    const dates=Object.keys(imported),existingCount=dates.filter(key=>{const old=entries[key];return old&&(old.text||old.savedAt||old.saveLog?.length||old.notes?.text||old.notes?.savedAt||old.notes?.saveLog?.length);}).length;
+    const body=document.createElement('div');
+    body.append(textNode('p','This encrypted backup contains '+dates.length+' '+(dates.length===1?'date':'dates')+'.'));
+    body.append(textNode('p',existingCount+' matching '+(existingCount===1?'date will be replaced':'dates will be replaced')+'; other dates already on this device will be kept.','hint'));
+    dialog('Restore encrypted diary',body,[{label:'Cancel',value:false},{label:'Restore backup',value:true,className:'primary'}]).then(ok=>{
+      if(!ok)return;
+      flushSession();
+      const merged = {...stateSnapshot(), entries:{...entries, ...imported}};
+      if (window.ADiaryTNative && !native('persist', merged)) {
+        showToast('Could not save the restored diary to device storage.', 5000);
+        return;
+      }
+      saveLocal(merged);
+      entries = merged.entries;
+      renderDate();
+      showToast('Imported '+dates.length+' '+(dates.length===1?'date':'dates')+'.');
+    });
+  }
+  function promptBackupPassword(encodedArchive) {
+    const body=document.createElement('div'),label=textNode('label','Backup password','backup-password-row');
+    const input=document.createElement('input');input.id='importBackupPassword';input.type='password';input.autocomplete='current-password';input.setAttribute('aria-label','Backup password');label.append(input);body.append(label);
+    const error=textNode('p','','backup-password-error');error.hidden=true;body.append(error);
+    dialog('Import encrypted diary',body,[{label:'Cancel',value:null},{label:'Decrypt',className:'primary',keepOpen:true,value:()=>{
+      if(!input.value){error.textContent='Enter the password for this backup.';error.hidden=false;return false;}
+      return input.value;
+    }}]).then(async password=>{
+      if(typeof password!=='string')return;
+      input.value='';
+      try{
+        const archive=JSON.parse(encodedArchive);
+        if(!archive||archive.format!=='ADiaryT.EncryptedBackup'||archive.version!==1||archive.kdf!=='PBKDF2-SHA-256'||archive.cipher!=='AES-256-GCM'||!Number.isSafeInteger(archive.iterations)||archive.iterations<100000||archive.iterations>1000000)
+          throw new Error('Unsupported encrypted backup format.');
+        const key=await backupKey(password,base64ToBytes(archive.salt),archive.iterations);
+        const aad=new TextEncoder().encode('ADiaryT.EncryptedBackup/v1');
+        const plaintext=await crypto.subtle.decrypt({name:'AES-GCM',iv:base64ToBytes(archive.iv),additionalData:aad,tagLength:128},key,base64ToBytes(archive.ciphertext));
+        confirmImportedEntries(validateBackup(new TextDecoder().decode(plaintext)));
+      }catch(error){showToast(error.message==='Unsupported encrypted backup format.'?error.message:'Could not decrypt this backup. Check the password and selected file.',5000);}
+    });
   }
   function handleAction(action) {
     switch (action) {
@@ -643,16 +746,40 @@
       case 'darkMode': closeMenu(); settings.dark = !settings.dark; applyTheme(); schedulePersist(); break;
       case 'clockFormat': showClockFormat(); break;
       case 'about': showAbout(); break;
-      case 'export': exportDiary(); break;
+      case 'export': showExportBackup(); break;
+      case 'import': requestImportBackup(); break;
     }
   }
   function nativeEvent(event) {
     const p = event.payload || {}, requestId = event.requestId;
+    if(event.type==='importStart'){
+      if (pending.get(requestId) !== 'Import') return;
+      if(!Number.isSafeInteger(p.bytes)||p.bytes<1||p.bytes>64*1024*1024){pending.delete(requestId);showToast('The selected encrypted backup is too large or invalid.',5000);return;}
+      importTransfer={requestId,bytes:p.bytes,chunks:[],length:0};
+      return;
+    }
+    if(event.type==='importChunk'){
+      if(!importTransfer||importTransfer.requestId!==requestId)return;
+      if(typeof p.data!=='string'||importTransfer.length+p.data.length>90*1024*1024){importTransfer=null;pending.delete(requestId);showToast('The selected encrypted backup is too large.',5000);return;}
+      importTransfer.chunks.push(p.data);importTransfer.length+=p.data.length;
+      return;
+    }
+    if(event.type==='importComplete'){
+      if(!importTransfer||importTransfer.requestId!==requestId)return;
+      const transfer=importTransfer;importTransfer=null;pending.delete(requestId);
+      try{
+        const archiveBytes=base64ToBytes(transfer.chunks.join(''));
+        if(archiveBytes.length!==transfer.bytes)throw new Error('size');
+        promptBackupPassword(new TextDecoder().decode(archiveBytes));
+      }catch(_){showToast('The selected file is not a valid encrypted diary backup.',5000);}
+      return;
+    }
     if (pending.has(requestId)) {
+      const operation = pending.get(requestId);
       pending.delete(requestId);
-      if (event.type === 'saved') showToast('Diary exported');
-      else if (event.type === 'error') showToast(p.message || 'Export failed', 5000);
-      else if (event.type === 'cancelled') showToast('Export cancelled');
+      if (event.type === 'saved') showToast('Encrypted diary backup exported');
+      else if (event.type === 'error') showToast(p.message || operation + ' failed', 5000);
+      else if (event.type === 'cancelled') showToast(operation + ' cancelled');
     }
     if (event.type === 'bootstrap') bootstrap(p);
   }

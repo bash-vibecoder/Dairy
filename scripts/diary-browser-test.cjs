@@ -32,6 +32,10 @@ fs.mkdirSync(output, {recursive:true});
       const nativeSetInterval = window.setInterval.bind(window);
       window.setInterval = (callback, delay, ...args) => { if (delay === 30000) window.__clockTicks.push(callback); return nativeSetInterval(callback, delay, ...args); };
       window.__persisted = null;
+      window.__backupChunks=[];
+      window.__backupExport='';
+      window.__backupName='';
+      window.__importRequest='';
       window.ADiaryTNative = {dispatch(raw) {
         const command = JSON.parse(raw);
         if (command.type === 'ready') {
@@ -46,7 +50,15 @@ fs.mkdirSync(output, {recursive:true});
           if (stored) payload = JSON.parse(stored);
           setTimeout(() => window.App.nativeEvent({type:'bootstrap', payload}), 0);
         }
-        if (command.type === 'persist') window.__persisted = command.payload;
+        if (command.type === 'persist') {
+          if (window.__rejectRestore && command.payload.entries['2026-11-19']?.text === '') return false;
+          window.__persisted = command.payload;
+        }
+        if (command.type === 'saveStart') { window.__backupChunks=[];window.__backupName=command.payload.name; }
+        if (command.type === 'saveChunk') { const binary=atob(command.payload.data),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);window.__backupChunks.push(bytes); }
+        if (command.type === 'saveComplete') { const size=window.__backupChunks.reduce((sum,part)=>sum+part.length,0),bytes=new Uint8Array(size);let offset=0;for(const part of window.__backupChunks){bytes.set(part,offset);offset+=part.length;}window.__backupExport=new TextDecoder().decode(bytes); }
+        if (command.type === 'open') window.__importRequest=command.requestId;
+        return true;
       }};
     });
     const page = await context.newPage();
@@ -493,7 +505,94 @@ fs.mkdirSync(output, {recursive:true});
     await page.locator('#dialogClose').click();
     assert.deepEqual(errors, [], 'No runtime JavaScript errors');
     assert.deepEqual(external, [], 'No requests outside bundled local assets');
-    console.log('Diary browser checks passed: separate per-date Diary and Notes, calendar date selection and future Notes editing, locked past Notes and non-today Diary, independent autosave logs/highlights, five-minute migration and boundaries, midnight/restart persistence, calendar/preferences, and offline regressions.');
+    await page.locator('#menuButton').click();
+    await page.locator('#menuPopover [data-action="export"]').click();
+    assert.equal(await page.locator('#dialogTitle').textContent(),'Export encrypted diary');
+    assert.match(await page.locator('#dialogBody').textContent(),/all dates, Diary entries, Notes, and autosave history/);
+    await page.locator('#backupPassword').fill('correct horse battery');
+    await page.locator('#backupPasswordAgain').fill('mismatched passphrase');
+    await page.locator('#dialogActions button').filter({hasText:'Create backup'}).click();
+    assert.equal(await page.locator('#dialogBackdrop').isVisible(),true,'Password mismatch keeps the export form open');
+    assert.match(await page.locator('.backup-password-error').textContent(),/passwords do not match/);
+    await page.locator('#backupPasswordAgain').fill('correct horse battery');
+    await page.locator('#dialogActions button').filter({hasText:'Create backup'}).click();
+    await page.waitForFunction(()=>window.__backupExport.length>0);
+    assert.equal(await page.evaluate(()=>window.__backupName),'ADiaryT-2026-11-19.adiary','Encrypted backup uses its own archive extension');
+    const encryptedArchive=await page.evaluate(()=>window.__backupExport);
+    const envelope=JSON.parse(encryptedArchive);
+    assert.equal(envelope.format,'ADiaryT.EncryptedBackup');
+    assert.equal(envelope.cipher,'AES-256-GCM');
+    assert.equal(envelope.kdf,'PBKDF2-SHA-256');
+    assert.equal(envelope.iterations,310000);
+    assert.equal(encryptedArchive.includes('Today reminder for later.'),false,'Backup file does not expose Notes as cleartext');
+    assert.equal(encryptedArchive.includes('Final text preserved when midnight arrives.'),false,'Backup file does not expose Diary entries as cleartext');
+    const backedUpDays = await page.evaluate(() => window.__persisted.entries);
+    assert.equal(backedUpDays['2026-11-28'], undefined);
+    await page.locator('#bottomCalendar').click();
+    await page.locator('[data-date="2026-11-28"]').click();
+    await page.locator('#editor').fill('Local only note');
+    await page.locator('#bottomToday').click();
+    await page.locator('#diaryTab').click();
+    await page.locator('#editor').fill('Edited after exporting.');
+    await page.waitForFunction(()=>window.__persisted?.entries?.['2026-11-19']?.text==='Edited after exporting.');
+    const deliverEncryptedFile=async(content=encryptedArchive)=>{
+      await page.locator('#menuButton').click();
+      await page.locator('#menuPopover [data-action="import"]').click();
+      const id=await page.evaluate(()=>window.__importRequest);
+      await page.evaluate(({content,requestId})=>{
+        const bytes=new TextEncoder().encode(content);
+        window.App.nativeEvent({type:'importStart',requestId,payload:{bytes:bytes.length}});
+        for(let offset=0;offset<bytes.length;offset+=96*1024){
+          const part=bytes.subarray(offset,Math.min(offset+96*1024,bytes.length));let binary='';
+          for(let i=0;i<part.length;i++)binary+=String.fromCharCode(part[i]);
+          window.App.nativeEvent({type:'importChunk',requestId,payload:{data:btoa(binary)}});
+        }
+        window.App.nativeEvent({type:'importComplete',requestId,payload:{}});
+      },{content,requestId:id});
+      await page.waitForFunction(()=>document.querySelector('#dialogTitle').textContent==='Import encrypted diary');
+    };
+    await deliverEncryptedFile();
+    await page.locator('#importBackupPassword').fill('wrong passphrase');
+    await page.locator('#dialogActions button').filter({hasText:'Decrypt'}).click();
+    await page.waitForFunction(()=>/Could not decrypt/.test(document.querySelector('#toast').textContent));
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('diary-offline-v1')).entries['2026-11-19'].text),'Edited after exporting.','Wrong password leaves local entries unchanged');
+    const corruptBytes = Buffer.from(envelope.ciphertext, 'base64');
+    corruptBytes[0] ^= 1;
+    await deliverEncryptedFile(JSON.stringify({...envelope, ciphertext:corruptBytes.toString('base64')}));
+    await page.evaluate(() => { document.querySelector('#toast').textContent = ''; });
+    await page.locator('#importBackupPassword').fill('correct horse battery');
+    await page.locator('#dialogActions button').filter({hasText:'Decrypt'}).click();
+    await page.waitForFunction(() => /Could not decrypt/.test(document.querySelector('#toast').textContent));
+    const previewRestore = async () => {
+      await deliverEncryptedFile();
+      await page.locator('#importBackupPassword').fill('correct horse battery');
+      await page.locator('#dialogActions button').filter({hasText:'Decrypt'}).click();
+      await page.waitForFunction(() => document.querySelector('#dialogTitle').textContent === 'Restore encrypted diary');
+    };
+    await previewRestore();
+    await page.locator('#dialogActions button').filter({hasText:'Cancel'}).click();
+    assert.equal(await page.locator('#editor').inputValue(), 'Edited after exporting.');
+    await previewRestore();
+    await page.evaluate(() => { window.__rejectRestore = true; });
+    await page.locator('#dialogActions button').filter({hasText:'Restore backup'}).click();
+    await page.waitForFunction(() => /Could not save the restored diary/.test(document.querySelector('#toast').textContent));
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('diary-offline-v1')).entries['2026-11-19'].text), 'Edited after exporting.');
+    await page.evaluate(() => { window.__rejectRestore = false; });
+    await previewRestore();
+    assert.match(await page.locator('#dialogBody').textContent(),/matching dates will be replaced; other dates already on this device will be kept/);
+    await page.locator('#dialogActions button').filter({hasText:'Restore backup'}).click();
+    await page.waitForFunction(() => window.__persisted.entries['2026-11-19'].text === '');
+    await page.reload();
+    await page.waitForFunction(() => window.__persisted?.entries?.['2026-11-28']?.notes.text === 'Local only note');
+    const restoredDays = await page.evaluate(() => window.__persisted.entries);
+    for (const key of Object.keys(backedUpDays)) {
+      for (const field of ['text', 'saveLog', 'savedAt', 'updatedAt', 'notes']) {
+        assert.deepEqual(restoredDays[key][field], backedUpDays[key][field], key + ' restores ' + field);
+      }
+    }
+    assert.deepEqual(external, [], 'Backup and restore stay offline');
+    assert.deepEqual(errors, [], 'No runtime JavaScript errors during encrypted backup export/import');
+    console.log('Diary browser checks passed: Diary and Notes tabs/rules, five-minute logs, offline calendar, AES-256-GCM encrypted backups, password validation, wrong-password rejection, restore confirmation and non-destructive date merge.');
     console.log('Screenshots: ' + output);
   } finally {
     if (browser) await browser.close();

@@ -1,3 +1,10 @@
+# ADiaryT 1.12
+
+- Add an offline encrypted backup export and import flow for all dates, Diary entries, Notes, and autosave word history.
+- Encrypt backups with AES-256-GCM and a password-derived key (PBKDF2-SHA-256); save as `.adiary` instead of plain text.
+- Require a password to decrypt imports and confirm before restoring. Matching dates are replaced; other dates on the device are preserved.
+- Android version 1.12 (version code 22), packaged as `ADiaryT-v1.12.apk`.
+
 # ADiaryT 1.11
 
 - Add separate Diary and Notes tabs to every date, with independent text, autosave times, and five-minute word history.
